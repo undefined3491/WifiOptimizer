@@ -63,6 +63,8 @@
 
 ## Task 5 — Owner-assisted device phase (pending)
 
+Partial progress (2026-10-15): the owner reports LCD / SteamOS 3.8.28 Stable / Decky Loader 3.2.10 and prior Optimize Safe use without perceived benefit. The [inventory record](../../testing/results/2026-10-15-owner-inventory.md) lists missing evidence; environment/configuration capture and controlled tests remain incomplete.
+
 - [ ] Capture exact LCD / Stable environment and whether an older plugin is installed, then record existing configuration before installation/reset/optimization.
 - [ ] Review the recovery contract and prepare candidate fixes through scoped PRs with regression tests.
 - [ ] Execute the LCD / Stable protocol on the named corrected candidate, recording actual results and limitations. Additional OS channels/hardware have separate coverage.

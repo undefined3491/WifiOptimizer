@@ -25,7 +25,7 @@ Consequently, the standard paths remain `$DECKY_HOME/plugins/WiFi Optimizer`, `$
 
 Keep the existing dispatcher path and system-configuration filenames (`99-wifi-optimizer*`). They are compatibility identifiers for the same optimizer. Regenerating the dispatcher must continue to use the actual settings/plugin paths. Do not run Reset or Uninstall to accomplish the rename: audit findings ST0-004 and ST0-016 leave restoration behavior unresolved.
 
-Decky source inspected on 2026-10-15 at commit `75563316f9119ee7e36be7f43885be65e877fad0` separates the manifest name from `plugin_directory`, derives settings/data/log paths from that directory and discovers the uninstall directory by reading manifests. These traces support this design; the owner's exact installed Decky version and on-device behavior remain to be verified.
+Decky source inspected on 2026-10-15 at commit `75563316f9119ee7e36be7f43885be65e877fad0` separates the manifest name from `plugin_directory`, derives settings/data/log paths from that directory and discovers the uninstall directory by reading manifests. These traces support this design. The owner now reports Decky Loader `3.2.10` on SteamOS `3.8.28` Stable; comparison with that installed Decky version and on-device behavior remain pending. See the [partial inventory and prior Optimize Safe use](../../testing/results/2026-10-15-owner-inventory.md).
 
 Decky's own hidden/disabled/order preferences use plugin names in some paths. Do not rewrite Decky's global settings automatically. Record the old enabled/hidden state before migration and verify the new entry afterward; do not claim these UI preferences migrate automatically.
 
