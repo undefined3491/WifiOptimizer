@@ -23,6 +23,7 @@ Decky plugin (Steam Deck / handhelds): React TS frontend + Python backend (runs 
 
 ## Repository and updates
 
+- Owner-selected public identity (2026-10-15): plugin `WiFi Optimizer TMS`, future repository slug and package name `wifi-optimizer-tms`. This decision does not mean the live repository or product has been renamed. The [identity and cutover design](docs/superpowers/specs/2026-10-15-tms-identity-design.md) is proposed for review; retaining the legacy installation directory is a proposal, not yet an approved compatibility policy. Coordinate product URLs, archive roots and delivery checks before the external rename; retain Stage 0 release gates.
 - This fork's repository is `https://github.com/undefined3491/WifiOptimizer`. Installer downloads, in-app update checks/downloads, clone/install instructions, and bug-report links must point here. Keep upstream author credits and the BSD-3-Clause license intact.
 - Stable updates use this fork's latest published GitHub release, tagged `v<version>` with a matching `package.json` version. Beta updates read `package.json` and download the archive from this fork's `beta` branch. Both require the corresponding release/branch to exist; never fall back to the upstream repository.
 - `install.sh` falls back to this fork's `main` branch if it cannot obtain a release tag. In-app update checks have no such fallback. Rebuild and include the tracked `dist/index.js` and `dist/index.js.map` before publishing a release or updating an installable branch.
