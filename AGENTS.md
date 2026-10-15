@@ -8,8 +8,8 @@ Decky plugin (Steam Deck / handhelds): React TS frontend + Python backend (runs 
 - Work on `codex/<change>` branches. Push the working branch, open a PR to `main`, complete review and the required `ci-required` check, then squash merge. A solo maintainer does not need an enforced approval from a second human; review still happens before merge.
 - Publishing is separate from merging. Bump the version when preparing a release: patch for fixes, minor for features. Documentation/CI-only changes do not require their own release. Stable publication requires a manual decision and a smoke test on a supported device, including reconnect and sleep/wake for networking changes.
 - Stable releases must use `v<package.json version>` and include rebuilt, tracked `dist` files in that exact tagged commit. Maintain `beta` only when pre-release testing is needed; the current Beta updater consumes a branch, not GitHub pre-release assets.
-- Implementation design: [delivery workflow spec](docs/superpowers/specs/2026-10-15-delivery-workflow-design.md). Execution: [rollout plan](docs/superpowers/plans/2026-10-15-delivery-workflow.md). These documents record the rationale and acceptance checks; the implementation will add `CONTRIBUTING.md` as the operational runbook.
-- Current rollout status: policy agreed; spec and implementation plan prepared for owner review. CI/release workflows and GitHub protection are not active yet. Verify repository settings and actual Actions runs before claiming enforcement. The selected execution method for this rollout is subagent-driven development on `gpt-6-luna`.
+- Operational instructions: [CONTRIBUTING.md](CONTRIBUTING.md). Design rationale and acceptance checks: [delivery workflow spec](docs/superpowers/specs/2026-10-15-delivery-workflow-design.md); execution detail: [rollout plan](docs/superpowers/plans/2026-10-15-delivery-workflow.md).
+- Current rollout status: contribution and release documentation is in place. CI/release workflows and GitHub protection are not active yet. Verify repository settings and actual Actions runs before claiming enforcement.
 
 ## Repository and updates
 
