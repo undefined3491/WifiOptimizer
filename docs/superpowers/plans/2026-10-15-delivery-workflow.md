@@ -10,7 +10,7 @@
 
 **Spec:** [Delivery workflow design](../specs/2026-10-15-delivery-workflow-design.md).
 
-**Status:** Approved by the owner on 2026-10-15; all three implementation tasks are complete locally and have passed task review. Hosted CI and remote activation remain pending. Owner steering removes any mandatory branch-name prefix and requires push CI on all branches.
+**Status:** Approved by the owner on 2026-10-15; all three implementation tasks are complete and reviewed. PR #1 is open on this fork and initial hosted CI passed. Merge and remote protection/settings activation remain pending. Owner steering removes any mandatory branch-name prefix and requires push CI on all branches.
 
 ## Global Constraints
 
@@ -107,7 +107,7 @@ Helper contracts:
 - Task 2: `e442c44` / `877bac3` — shared CI and validators, unrestricted branch naming, formatting regression fix; task and scoped fix reviews passed. The interim scratch report commit was removed from the final tree.
 - Task 3: `3dfb4c4` / `0668557` — manual Stable release, desired GitHub settings, strict full-ref and API-header validation; task and scoped fix reviews passed.
 - Parent verification: 14 tests, build, project typecheck, Python/Bash syntax, workflow lint, committed source archive and generated-artifact comparison passed. Read-only live GitHub history confirms the first-release absence path.
-- Package version remains `0.11.6`; product dependencies, lockfile and tsconfig are unchanged. No push, merge, beta branch, release or remote protection/settings change has been performed.
+- At the local implementation handoff, package version remained `0.11.6`; product dependencies, lockfile and tsconfig were unchanged. No push, merge, beta branch, release or remote protection/settings change had been performed at that stage.
 - Final whole-branch review and owner handoff follow the completed implementation tasks; remote activation is a separate decision.
 
 
@@ -115,4 +115,10 @@ Helper contracts:
 
 Final whole-branch review by `gpt-6-luna`/high passed at `04ffd66` with no actionable findings. The local implementation and all task/fix reviews are complete. The reviewed source archive was verified again. The temporary execution workspace was removed after confirming it contained no tracked files; no discretionary rulings or parked findings remain.
 
-The PR description is prepared locally at `out/delivery-pr-body.md` (ignored). Working branch: `codex/delivery-workflow-ci`; this concrete branch name is not a naming policy. The managed worktree is preserved for the owner to approve push/PR creation and subsequent hosted CI. No merge, Stable release or GitHub protection activation has occurred.
+The PR description is stored locally at `out/delivery-pr-body.md` (ignored). Working branch: `codex/delivery-workflow-ci`; this concrete branch name is not a naming policy. The managed worktree is preserved for PR iteration. No merge, Stable release or GitHub protection activation has occurred.
+
+### Fork PR and hosted CI — 2026-10-15
+
+The owner approved pushing the working branch and creating the PR, explicitly confirming that it targets this fork. [PR #1](https://github.com/undefined3491/WifiOptimizer/pull/1) has both head and base in `undefined3491/WifiOptimizer`, with base branch `main`.
+
+Hosted GitHub Actions checks for initial commit `9618b9f` passed on both [push](https://github.com/undefined3491/WifiOptimizer/actions/runs/38753431821) and [pull_request](https://github.com/undefined3491/WifiOptimizer/actions/runs/38753432011). The actual check context is `ci-required` from GitHub Actions app ID `15368`. Verify subsequent commits' checks before merging. Merge and protection/settings activation still require the owner's final decision; Stable publication remains separate.
