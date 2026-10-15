@@ -4,15 +4,15 @@ This fork is maintained at [undefined3491/WifiOptimizer](https://github.com/unde
 
 > **Heads up:** This plugin modifies WiFi and network settings. Some optimizations (band preference, custom DNS, WiFi backend switch) can temporarily prevent WiFi from connecting. If this happens, a reboot usually fixes it. You can also try forgetting and rejoining your WiFi network from Steam settings.
 
-A [Decky Loader](https://decky.xyz/) plugin that fixes WiFi problems that cause lag, stuttering, and dropped connections during game streaming. Benefits any streaming over WiFi - Steam Remote Play, [Moonlight](https://moonlight-stream.org/) / [Sunshine](https://app.lizardbyte.dev/Sunshine/), Parsec, Chiaki, and more.
+A [Decky Loader](https://decky.xyz/) plugin exposing WiFi and network settings intended to improve game streaming, including Steam Remote Play, [Moonlight](https://moonlight-stream.org/) / [Sunshine](https://app.lizardbyte.dev/Sunshine/), Parsec and Chiaki. This fork is auditing the inherited implementation and measuring its effects on current systems.
 
-**Supported devices:** Steam Deck (LCD and OLED), Legion Go, ROG Ally, and other PC handhelds. Works on SteamOS, Bazzite, and CachyOS.
+**Hardware handling inherited from upstream:** Steam Deck (LCD and OLED), Legion Go, ROG Ally, and other PC handhelds, with SteamOS, Bazzite and CachyOS paths. This fork's runtime validation is pending; the first test target is Steam Deck LCD on SteamOS Stable. See the [audit-first roadmap](ROADMAP.md) and [current audit/compatibility record](docs/audits/2026-10-15-stage-0.md).
 
 ## The problem
 
-The OS resets WiFi settings after every system update and sleep/wake cycle. Power management gets re-enabled and network buffers reset to defaults. The result: latency spikes, connection drops, and degraded streaming quality - and the only fix is a trip to Desktop Mode.
+WiFi power management, access-point roaming and network queue behavior can affect streaming. Settings can change across reconnects, sleep/wake and OS updates, but the behavior and useful workarounds depend on the OS, driver and network. Current SteamOS releases include relevant WiFi fixes, so this fork is reassessing the inherited optimizations against a measured baseline.
 
-WiFi Optimizer fixes this from Game Mode. One tap, and it stays fixed.
+WiFi Optimizer exposes these settings from Game Mode and can reapply enabled options after reconnects. Effects and tradeoffs need validation for the device and workload.
 
 ## Install / Update
 
@@ -35,57 +35,57 @@ Installation and updates use this fork. The installer falls back to its `main` b
 ## Getting started
 
 1. Open WiFi Optimizer from the Decky sidebar
-2. Tap **Optimize Safe** - this applies four no-brainer optimizations that are always beneficial:
-   - Disables WiFi power save and PCIe power states (prevents lag spikes and streaming degradation)
-   - Locks your BSSID (stops background scanning interruptions)
+2. The existing **Optimize Safe** preset applies the options below. Its name is inherited; universal benefit and battery cost are under audit. Validate individual options and recovery before testing the combined preset:
+   - Disables WiFi power save and PCIe power states
+   - Locks your BSSID, which also constrains access-point roaming
    - Enables auto-fix on wake (reapplies settings after sleep)
    - Tunes network buffers (handles streaming traffic bursts)
-3. That's it. The plugin maintains these settings automatically, even after sleep/wake and OS updates.
+3. Enabled options are reapplied through plugin startup and the reconnect dispatcher. Verify actual state and connection behavior after sleep/wake and updates.
 
-Want to go further? The remaining optimizations are available as individual toggles - each one has an **(i)** icon you can tap for a full explanation of what it does and any tradeoffs. Advanced options include forcing 5/6 GHz, custom DNS, disabling IPv6, CAKE traffic shaping, and switching between the `iwd` and `wpa_supplicant` WiFi backends.
+Want to go further? The remaining optimizations are available as individual toggles - each one has an **(i)** icon you can tap for an explanation of what it does and its tradeoffs. Advanced options include a 5 GHz band restriction, custom DNS, disabling IPv6, CAKE traffic shaping, and switching between the `iwd` and `wpa_supplicant` WiFi backends. The inherited UI's 6 GHz label does not provide a separate 6 GHz selection; this mismatch and other open runtime findings are recorded in the [Stage 0 audit](docs/audits/2026-10-15-stage-0-findings.md).
 
 ## All optimizations
 
-**Safe tier (applied by Optimize Safe)**
+**Existing Optimize Safe preset**
 
 | Optimization | What it does |
 |---|---|
-| Prevent lag spikes | Disables WiFi power management and PCIe power states that cause packet batching, latency spikes, and throughput degradation during sustained streaming. |
-| Stop background scanning | Locks to your current access point so your device stops scanning for other networks every few minutes. Disable before switching networks or if you use a mesh/multi-AP setup and need to roam. |
+| Prevent lag spikes | Disables WiFi power management and PCIe power states, aiming to reduce power-related latency. Benefit and power cost depend on the system and workload. |
+| Stop background scanning | Locks to the current access point. Disable before switching access points or when a mesh/multi-AP setup requires roaming. |
 | Auto-fix on wake | Installs a script that reapplies your settings every time WiFi reconnects - works even if Decky isn't running |
-| Network buffer tuning | Increases kernel buffer sizes and TX queue length to handle bursty streaming traffic without dropping packets |
+| Network buffer tuning | Increases kernel buffer sizes and TX queue length. Effects on buffering, loss and latency need measurement under the target workload. |
 
 **Manual opt-in (require configuration or have tradeoffs)**
 
 | Optimization | What it does | Why it's manual |
 |---|---|---|
-| Force 5 GHz / 6 GHz | Locks WiFi to the higher-frequency band to avoid Bluetooth interference | Won't connect if your network is 2.4 GHz only |
+| Force 5 GHz | Restricts the saved WiFi profile to the 5 GHz band | Won't connect if your network is 2.4 GHz only; the inherited 6 GHz UI claim is under correction |
 | Traffic shaping (CAKE) | Replaces the default network queue with CAKE for fair queuing, bufferbloat prevention, and ACK filtering. Does not limit bandwidth. | Replaces your system's default qdisc; resets on reboot |
 | Custom DNS | Overrides your ISP's DNS with Cloudflare, Google, Quad9, or custom servers | Requires choosing a provider |
 | Disable IPv6 | Forces all traffic through IPv4 | Only helps on networks with broken IPv6 - most are fine |
-| WiFi backend (iwd / wpa_supplicant) | Switches between the default `iwd` and the older `wpa_supplicant`. Some devices are more stable with wpa_supplicant across sleep/wake and 5 GHz. | Only available when both backends are installed on the system; some networks (certain WPA3, enterprise setups) behave differently between the two |
+| WiFi backend (iwd / wpa_supplicant) | Switches between installed NetworkManager WiFi backends. The OS version and installation history determine the default; detect the actual backend. | Availability, sleep/wake behavior and compatibility with WPA3 or enterprise networks vary; review and test before switching |
 
 ## Hardware support
 
 | Device | WiFi Chip | Driver | Notes |
 |---|---|---|---|
-| Steam Deck LCD | WiFi 5 (RTL8822CE) | rtw88 | Full support |
-| Steam Deck OLED | WiFi 6E (QCA206X) | ath11k_pci | Full support |
-| Legion Go (all models) | WiFi 6E (MT7922) | mt7921e | Full support |
-| ROG Ally (all models) | WiFi 6E (MT7922) | mt7921e | Full support |
+| Steam Deck LCD | WiFi 5 (RTL8822CE) | rtw88 | First validation target; results pending |
+| Steam Deck OLED | WiFi 6E (QCA206X) | ath11k_pci | Upstream handling; unverified in this fork |
+| Legion Go (matching adapters) | WiFi 6E (MT7922) | mt7921e | Upstream handling; model/adapter coverage unverified |
+| ROG Ally (matching adapters) | WiFi 6E (MT7922) | mt7921e | Upstream handling; model/adapter coverage unverified |
 | Other PC handhelds | Varies | iwlwifi, etc. | Detected automatically; driver-specific fixes applied when available |
 
-The plugin detects your WiFi hardware at startup and applies the right optimizations for your chip. Devices with unrecognized hardware still get universal optimizations (power save, buffer tuning, BSSID lock, etc.).
+The plugin detects WiFi hardware at startup and uses driver-specific handling where implemented. Devices with unrecognized hardware can still expose shared settings such as power save, buffer tuning and BSSID lock. Available controls do not establish that a setting is beneficial or validated on that device.
 
 ## How it works
 
 The plugin has two parts:
 
-1. **The Decky plugin** runs in the Quick Access Menu. It applies optimizations when you toggle them and shows live status (signal, speed, frequency, channel). It detects when settings have drifted after wake and lets you fix them with one tap.
+1. **The Decky plugin** runs in the Quick Access Menu. It applies optimizations when you toggle them and shows live status (signal, speed, frequency, channel). It reports detected drift after wake; the current repair action has an open audit finding (ST0-011), so it should not be assumed to repair only the existing settings.
 
 2. **A NetworkManager dispatcher script** runs independently of Decky, outside of Steam. Every time your WiFi reconnects (including after sleep), it automatically reapplies the volatile settings (power save, PCIe power states, buffers, CAKE). If you uninstall the plugin, the script removes itself.
 
-No background processes, no polling, no battery impact.
+The visible panel polls status, and a plugin-level game-start listener reapplies volatile settings. The dispatcher runs on WiFi reconnects. Power-management changes have not yet had their battery impact measured in this fork; see the [device validation protocol](docs/testing/steam-deck-lcd-stable.md).
 
 ## Uninstall
 
@@ -115,7 +115,7 @@ pnpm run build
 
 To deploy to your Deck, copy `.vscode/defsettings.json` to `.vscode/settings.json`, fill in your Deck's IP and password, then use the VS Code **builddeploy** task (Terminal > Run Task).
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution, verification, and release workflow, and [CHANGELOG.md](CHANGELOG.md) for fork changes.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution, verification, and release workflow, [ROADMAP.md](ROADMAP.md) for planned work, and [CHANGELOG.md](CHANGELOG.md) for implemented fork changes. Stage 0 audit and device validation precede the first Stable release of this fork.
 
 ## Contact
 
