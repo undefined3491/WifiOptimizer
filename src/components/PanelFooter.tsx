@@ -55,7 +55,7 @@ export function PanelFooter({ version }: PanelFooterProps) {
         <div style={rowStyle}>
           If WiFi won't reconnect, a reboot usually fixes it.
           <br />
-          Bugs? Report at github.com/ArcadaLabs-Jason/WifiOptimizer
+          Bugs? Report at github.com/undefined3491/WifiOptimizer
         </div>
       </PanelSectionRow>
       <PanelSectionRow>

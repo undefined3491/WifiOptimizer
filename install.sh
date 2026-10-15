@@ -1,6 +1,6 @@
 #!/bin/bash
 # WiFi Optimizer - Decky Plugin Installer
-# Usage: curl -sL https://github.com/ArcadaLabs-Jason/WifiOptimizer/raw/main/install.sh -o /tmp/wifi-opt-install.sh && sudo bash /tmp/wifi-opt-install.sh
+# Usage: curl -sL https://github.com/undefined3491/WifiOptimizer/raw/main/install.sh -o /tmp/wifi-opt-install.sh && sudo bash /tmp/wifi-opt-install.sh
 
 set -e
 
@@ -32,15 +32,15 @@ fi
 
 # Fetch latest release tag from GitHub
 echo "Checking for latest release..."
-LATEST_TAG=$(curl -sL "https://api.github.com/repos/ArcadaLabs-Jason/WifiOptimizer/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+LATEST_TAG=$(curl -sL "https://api.github.com/repos/undefined3491/WifiOptimizer/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
 
 if [ -z "$LATEST_TAG" ]; then
     echo "Warning: Couldn't fetch latest release, falling back to main branch"
-    REPO_URL="https://github.com/ArcadaLabs-Jason/WifiOptimizer/archive/refs/heads/main.tar.gz"
+    REPO_URL="https://github.com/undefined3491/WifiOptimizer/archive/refs/heads/main.tar.gz"
     DIR_NAME="WifiOptimizer-main"
 else
     echo "Latest release: $LATEST_TAG"
-    REPO_URL="https://github.com/ArcadaLabs-Jason/WifiOptimizer/archive/refs/tags/${LATEST_TAG}.tar.gz"
+    REPO_URL="https://github.com/undefined3491/WifiOptimizer/archive/refs/tags/${LATEST_TAG}.tar.gz"
     DIR_NAME="WifiOptimizer-${LATEST_TAG#v}"
 fi
 

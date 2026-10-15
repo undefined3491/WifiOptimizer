@@ -1,5 +1,7 @@
 # WiFi Optimizer v0.11.6
 
+This fork is maintained at [undefined3491/WifiOptimizer](https://github.com/undefined3491/WifiOptimizer), based on the original [Arcada Labs project](https://github.com/ArcadaLabs-Jason/WifiOptimizer).
+
 > **Heads up:** This plugin modifies WiFi and network settings. Some optimizations (band preference, custom DNS, WiFi backend switch) can temporarily prevent WiFi from connecting. If this happens, a reboot usually fixes it. You can also try forgetting and rejoining your WiFi network from Steam settings.
 
 A [Decky Loader](https://decky.xyz/) plugin that fixes WiFi problems that cause lag, stuttering, and dropped connections during game streaming. Benefits any streaming over WiFi - Steam Remote Play, [Moonlight](https://moonlight-stream.org/) / [Sunshine](https://app.lizardbyte.dev/Sunshine/), Parsec, Chiaki, and more.
@@ -17,7 +19,7 @@ WiFi Optimizer fixes this from Game Mode. One tap, and it stays fixed.
 [Decky Loader](https://decky.xyz/) must be installed first. Then open Desktop Mode > Konsole and run:
 
 ```bash
-curl -sL https://github.com/ArcadaLabs-Jason/WifiOptimizer/raw/main/install.sh -o /tmp/wifi-opt-install.sh && sudo bash /tmp/wifi-opt-install.sh
+curl -sL https://github.com/undefined3491/WifiOptimizer/raw/main/install.sh -o /tmp/wifi-opt-install.sh && sudo bash /tmp/wifi-opt-install.sh
 ```
 
 This requires a user password - set one with `passwd` in Konsole if you haven't already.
@@ -25,6 +27,8 @@ This requires a user password - set one with `passwd` in Konsole if you haven't 
 Switch back to Game Mode. Open the Quick Access Menu (**...** button) > Decky > WiFi Optimizer.
 
 **Updating:** The plugin checks for updates automatically when you open it. If an update is available, an update button appears at the top of the panel - tap it and the plugin updates and restarts itself. You can also update manually by running the install command above again.
+
+Installation and updates use this fork. The installer falls back to its `main` branch when no release is available. In-app Stable updates require a published GitHub release with a `v<version>` tag; Beta updates require a `beta` branch with a version in `package.json`. Until those are available, use the install command above.
 
 > **Note:** If you're on a version before v0.6.6, the in-app updater had bugs. Please update manually using the install command above to get working auto-updates.
 
@@ -85,7 +89,7 @@ No background processes, no polling, no battery impact.
 
 ## Uninstall
 
-**Before uninstalling:** tap **Reset Settings** in the plugin's Actions section. This reverts the runtime optimizations (power save, buffer tuning, PCIe ASPM, CAKE) and deletes the plugin's own config files. Per-connection NetworkManager profile changes (BSSID lock, band preference, custom DNS, IPv6) stay on your saved WiFi network - to remove those, forget and rejoin the network from Steam's WiFi settings. The WiFi backend choice (iwd vs wpa_supplicant) is a system-wide setting and isn't touched by the plugin on uninstall.
+**Before uninstalling:** tap **Reset Settings** in the plugin's Actions section. This reverts the runtime optimizations (power save, buffer tuning, PCIe ASPM, CAKE) and deletes the plugin's own config files. Per-connection NetworkManager profile changes (BSSID lock, band preference, custom DNS, IPv6) stay on your saved WiFi network - to remove those, forget and rejoin the network from Steam's WiFi settings. The WiFi backend choice (iwd vs wpa_supplicant) is system-wide. Reset and uninstall remove the plugin's generic backend override used on systems such as Bazzite/CachyOS; the SteamOS helper's backend configuration and systemd service state are left in place.
 
 Then uninstall from Decky's plugin manager (Decky settings > WiFi Optimizer > Uninstall), or manually:
 
@@ -103,7 +107,7 @@ sudo systemctl restart plugin_loader
 Requires Node.js and pnpm v9.
 
 ```bash
-git clone https://github.com/ArcadaLabs-Jason/WifiOptimizer.git
+git clone https://github.com/undefined3491/WifiOptimizer.git
 cd WifiOptimizer
 pnpm i
 pnpm run build
