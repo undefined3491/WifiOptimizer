@@ -2,7 +2,7 @@
 
 Date: 2026-10-15
 
-Status: The owner accepted the delivery policy in conversation. This written spec and its implementation plan await owner review before implementation.
+Status: The owner approved this spec and its implementation plan on 2026-10-15. Implementation is in progress. The owner subsequently clarified that working-branch names must remain tool-neutral and unrestricted.
 
 ## Purpose and authority
 
@@ -21,7 +21,7 @@ Make contribution and release decisions durable across sessions and enforce the 
 
 ## Chosen contribution policy
 
-1. Changes use a short-lived `codex/<change>` branch and a PR targeting `main`.
+1. Changes use a short-lived working branch and a PR targeting `main`. Branch names are unrestricted and independent of the development environment; `feat/`, `fix/`, and `chore/` are optional examples, not required prefixes.
 2. The required check is named exactly `ci-required`. Review is completed before squash merge. Zero mandatory human approvals allows a solo maintainer to work; it does not waive code review.
 3. `main` is protected against deletion, force push, and changes that bypass the PR/check requirements. Repository merge settings allow squash merge and remove merged branches; merge commits and rebase merge are disabled.
 4. Merging changes does not publish releases. Version preparation is a separate PR, or part of a PR explicitly designated for release preparation.
@@ -32,7 +32,7 @@ Make contribution and release decisions durable across sessions and enforce the 
 
 Use GitHub-hosted `ubuntu-24.04`, Node `24`, pnpm `9.15.9`, and Python `3.11`. Do not change product dependencies, the lockfile, or `tsconfig.json` to introduce CI.
 
-Trigger CI on every `pull_request` to `main` and pushes to `main` and `codex/**`, with no path filters that could leave a required check missing. Use read-only repository permissions, bounded timeouts, and concurrency cancellation for superseded runs. Never use `pull_request_target` to build contributed code.
+Trigger CI on every `pull_request` to `main` and pushes to all branches, with no branch-name or path filters on pushes that could exclude work from another development environment. Use read-only repository permissions, bounded timeouts, and concurrency cancellation for superseded runs. Never use `pull_request_target` to build contributed code.
 
 A local composite action provides the same verification steps to CI and the release workflow:
 

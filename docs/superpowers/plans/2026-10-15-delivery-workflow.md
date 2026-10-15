@@ -10,12 +10,12 @@
 
 **Spec:** [Delivery workflow design](../specs/2026-10-15-delivery-workflow-design.md).
 
-**Status:** Prepared for owner review; implementation tasks have not started.
+**Status:** Approved by the owner on 2026-10-15; implementation is in progress. Owner steering removes any mandatory branch-name prefix and requires push CI on all branches.
 
 ## Global Constraints
 
 - Repository: `undefined3491/WifiOptimizer`; default branch: `main`; version remains `0.11.6` during this rollout.
-- Short-lived `codex/<change>` branch -> PR -> required `ci-required` check and review -> squash merge. Stable publication is separate and manual.
+- Short-lived working branch with any name -> PR -> required `ci-required` check and review -> squash merge. Branch naming is tool-neutral; optional `feat/`, `fix/`, or `chore/` examples impose no restriction. Stable publication is separate and manual.
 - No product dependency, lockfile, `tsconfig.json`, IPC or WiFi behavior changes. Never execute/import plugin runtime methods to validate CI.
 - CI: `ubuntu-24.04`, Node `24`, pnpm `9.15.9`, Python `3.11`; use `tsc --noEmit --skipLibCheck` for the documented dependency-declaration issue.
 - Use the three exact action SHA pins in the spec, read-only permissions by default and write permissions only in the release publication job.
@@ -52,7 +52,7 @@
 
 ### Task 2: Shared CI verification and required PR check
 
-**Files:** Create `scripts/check_delivery.py`, `tests/test_delivery.py`, `.github/actions/verify/action.yml`, `.github/workflows/ci.yml`.
+**Files:** Create `scripts/check_delivery.py`, `tests/test_delivery.py`, `.github/actions/verify/action.yml`, `.github/workflows/ci.yml`. Apply the owner's branch-naming correction to `AGENTS.md`, `CONTRIBUTING.md`, and the PR template if needed; include the amended spec/plan metadata in the task commit.
 
 **Interfaces:** Python CLI subcommands `snapshot --output PATH`, `verify-dist --snapshot PATH`, and `check-syntax`. Snapshot stores normalized committed bundle/map and validates embedded repository sources before the build. `check-syntax` invokes `check_python_and_shell`. Task 3 reuses `./.github/actions/verify` after checkout. Required job display name is exactly `ci-required`.
 
@@ -67,7 +67,7 @@ Public helper contracts (raise `ValueError` with actionable messages on invalid 
 - [ ] Add standard-library `unittest` cases for equivalent Decky/relative map prefixes and CRLF, changed mappings/source contents/JS, unsupported paths, missing bundle/map and stale embedded sources. Add a malformed generated-update-script fixture for the syntax validator. Run `python -m unittest discover -s tests -v`; first observe failures for missing functionality.
 - [ ] Implement the specified CLI/helpers using standard libraries. Validate snapshot/map structure and return nonzero actionable CLI errors; avoid plugin imports, backend execution and broad directory changes.
 - [ ] Add the composite action using the spec's pinned checkout-independent setup-node/setup-python actions, Node 24, Python 3.11 and pnpm 9.15.9. Run snapshot before build, frozen install, build, typecheck, validators/tests, and verify-dist. Temporary files go under `RUNNER_TEMP`; no generated fixes are committed automatically.
-- [ ] Add the read-only `ci.yml`: all PRs to main and pushes to main/codex branches, job `ci-required`, bounded timeout, cancellation of superseded branch runs, no path filter and no `pull_request_target`. Checkout uses the spec's pinned action.
+- [ ] Add the read-only `ci.yml`: all PRs to main and pushes to all branches regardless of their names, job `ci-required`, bounded timeout, cancellation of superseded branch runs, no branch-name/path filter on pushes and no `pull_request_target`. Checkout uses the spec's pinned action.
 - [ ] Run all validator tests and local build/typecheck. Verify the committed baseline passes artifact checks, deliberately stale temporary fixtures fail, workflow YAML parses, and the required job name/triggers/permissions match the spec. Account for source-map URI/EOL portability instead of blindly comparing raw map bytes.
 - [ ] Commit task-owned files and complete independent task review before Task 3 starts. Keep `package.json`, lockfile and product logic unchanged.
 

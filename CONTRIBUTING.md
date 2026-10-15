@@ -2,7 +2,7 @@
 
 ## Branches, pull requests, and review
 
-Use a short-lived `codex/<change>` branch and open a pull request targeting `main`. Complete review and the required `ci-required` check before merging by squash. Review is required even when one maintainer handles the change; there are zero mandatory external human approvals, so a solo maintainer can complete the process. Merged branches are removed.
+Use a short-lived feature branch with any clear name (for example, `feat/`, `fix/`, or `chore/`) and open a pull request targeting `main`. Complete review and the required `ci-required` check before merging by squash. Review is required even when one maintainer handles the change; there are zero mandatory external human approvals, so a solo maintainer can complete the process. Merged branches are removed.
 
 Merging does not publish a release. Documentation and CI-only changes do not need a version bump. Do not push directly to `main` or publish Stable automatically on merge.
 
