@@ -2,6 +2,15 @@
 
 Decky plugin (Steam Deck / handhelds): React TS frontend + Python backend (runs as **root** in `plugin_loader`) + NetworkManager dispatcher script for wake/reconnect persistence.
 
+## Delivery policy — owner-approved
+
+- The delivery workflow below is an agreed project decision. Follow it across sessions; do not replace it with direct pushes to `main`, automatic Stable publication on merge, or a different branching model without an explicit owner request. Report concrete conflicts or broken checks instead of silently changing the policy.
+- Work on `codex/<change>` branches. Push the working branch, open a PR to `main`, complete review and the required `ci-required` check, then squash merge. A solo maintainer does not need an enforced approval from a second human; review still happens before merge.
+- Publishing is separate from merging. Bump the version when preparing a release: patch for fixes, minor for features. Documentation/CI-only changes do not require their own release. Stable publication requires a manual decision and a smoke test on a supported device, including reconnect and sleep/wake for networking changes.
+- Stable releases must use `v<package.json version>` and include rebuilt, tracked `dist` files in that exact tagged commit. Maintain `beta` only when pre-release testing is needed; the current Beta updater consumes a branch, not GitHub pre-release assets.
+- Implementation design: [delivery workflow spec](docs/superpowers/specs/2026-10-15-delivery-workflow-design.md). Execution: [rollout plan](docs/superpowers/plans/2026-10-15-delivery-workflow.md). These documents record the rationale and acceptance checks; the implementation will add `CONTRIBUTING.md` as the operational runbook.
+- Current rollout status: policy agreed; spec and implementation plan prepared for owner review. CI/release workflows and GitHub protection are not active yet. Verify repository settings and actual Actions runs before claiming enforcement. The selected execution method for this rollout is subagent-driven development on `gpt-6-luna`.
+
 ## Repository and updates
 
 - This fork's repository is `https://github.com/undefined3491/WifiOptimizer`. Installer downloads, in-app update checks/downloads, clone/install instructions, and bug-report links must point here. Keep upstream author credits and the BSD-3-Clause license intact.
