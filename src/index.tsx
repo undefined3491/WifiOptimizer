@@ -89,7 +89,7 @@ class ErrorBoundary extends Component<
         <Banner variant="error">
           WiFi Optimizer hit an unexpected error. Close and reopen the panel to
           recover. If it keeps happening, please report at
-          github.com/ArcadaLabs-Jason/WifiOptimizer.
+          github.com/undefined3491/WifiOptimizer.
         </Banner>
       );
     }

@@ -1672,7 +1672,7 @@ class Plugin:
                     [
                         "/usr/bin/curl", "-sL", "--connect-timeout", "3", "--max-time", "10",
                         "-H", "Accept: application/vnd.github.raw+json",
-                        "https://api.github.com/repos/ArcadaLabs-Jason/WifiOptimizer/contents/package.json?ref=beta",
+                        "https://api.github.com/repos/undefined3491/WifiOptimizer/contents/package.json?ref=beta",
                     ],
                     15,
                     True,
@@ -1683,7 +1683,7 @@ class Plugin:
                     [
                         "/usr/bin/curl", "-sL", "--connect-timeout", "3", "--max-time", "10",
                         "-H", "Accept: application/vnd.github.v3+json",
-                        "https://api.github.com/repos/ArcadaLabs-Jason/WifiOptimizer/releases/latest",
+                        "https://api.github.com/repos/undefined3491/WifiOptimizer/releases/latest",
                     ],
                     15,
                     True,
@@ -1761,12 +1761,12 @@ class Plugin:
             plugin_dir = decky.DECKY_PLUGIN_DIR
 
             if channel == "beta":
-                download_url = "https://github.com/ArcadaLabs-Jason/WifiOptimizer/archive/refs/heads/beta.tar.gz"
+                download_url = "https://github.com/undefined3491/WifiOptimizer/archive/refs/heads/beta.tar.gz"
                 src_dir = "WifiOptimizer-beta"
                 label = f"beta v{latest}"
             else:
                 tag = f"v{latest}"
-                download_url = f"https://github.com/ArcadaLabs-Jason/WifiOptimizer/archive/refs/tags/{tag}.tar.gz"
+                download_url = f"https://github.com/undefined3491/WifiOptimizer/archive/refs/tags/{tag}.tar.gz"
                 src_dir = f"WifiOptimizer-{latest}"
                 label = f"v{latest}"
 

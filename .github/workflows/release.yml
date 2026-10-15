@@ -1,0 +1,86 @@
+name: Stable release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable version from package.json (for example 0.11.7)
+        required: true
+        type: string
+      deck_tested:
+        description: I completed the supported-device smoke test
+        required: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stable-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      sha: ${{ steps.release.outputs.sha }}
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      DECK_TESTED: ${{ inputs.deck_tested }}
+      RELEASE_REF: ${{ github.ref }}
+      RELEASE_REPOSITORY: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out dispatch commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Set release identity
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$(python scripts/check_delivery.py validate-release --version "$RELEASE_VERSION" --ref "$RELEASE_REF" --repository "$RELEASE_REPOSITORY" --deck-tested "$DECK_TESTED")"
+          printf 'tag=%s\nsha=%s\n' "$tag" "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+      - name: Verify plugin
+        uses: ./.github/actions/verify
+      - name: Check release history
+        shell: bash
+        run: python scripts/check_delivery.py release-history --version "$RELEASE_VERSION" --repository "$RELEASE_REPOSITORY"
+      - name: Verify exact source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/wifi-optimizer-release.tar"
+          git archive --format=tar --prefix="WifiOptimizer-${RELEASE_VERSION}/" "$GITHUB_SHA" > "$archive"
+          python scripts/check_delivery.py verify-archive --archive "$archive" --version "$RELEASE_VERSION"
+
+  publish:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+      RELEASE_SHA: ${{ needs.validate.outputs.sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out validated commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          fetch-depth: 0
+      - name: Extract release notes
+        shell: bash
+        run: python scripts/check_delivery.py release-notes --version "$RELEASE_VERSION" --output "$RUNNER_TEMP/release-notes.md"
+      - name: Create tag at validated commit
+        shell: bash
+        run: gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" -f "ref=refs/tags/${RELEASE_TAG}" -f "sha=${RELEASE_SHA}"
+      - name: Publish Stable release
+        shell: bash
+        run: gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" --notes-file "$RUNNER_TEMP/release-notes.md" --latest
