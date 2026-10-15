@@ -94,11 +94,11 @@ Helper contracts:
 
 ## Final verification and handoff
 
-- [ ] Dispatch a fresh `gpt-6-luna`/high whole-branch reviewer using the SDD final-review package and ledger; resolve confirmed blocking findings via one implementer fix wave plus scoped re-review.
-- [ ] Verify tracked archive contents for the implementation commit, documentation links, unchanged product version/dependencies/lockfile, and settled policy consistency.
-- [ ] Prepare a PR-ready branch and concise description with validation evidence, known full-tsc limitation, device-test requirements and inactive protection status. Do not describe local checks as successful hosted Actions runs.
+- [x] Dispatch a fresh `gpt-6-luna`/high whole-branch reviewer using the SDD final-review package and ledger; resolve confirmed blocking findings via one implementer fix wave plus scoped re-review.
+- [x] Verify tracked archive contents for the implementation commit, documentation links, unchanged product version/dependencies/lockfile, and settled policy consistency.
+- [x] Prepare a PR-ready branch and concise description with validation evidence, known full-tsc limitation, device-test requirements and inactive protection status. Do not describe local checks as successful hosted Actions runs.
 - [ ] Present the reviewed result for the final owner decision on pushing/merging and remote protection activation. Stable release remains a separate future maintainer action.
-- [ ] Preserve required execution rulings in the handoff and clean only this plan's ignored SDD workspace after its final review is clean, following the skill's path-safety rules.
+- [x] Preserve required execution rulings in the handoff and clean only this plan's ignored SDD workspace after its final review is clean, following the skill's path-safety rules.
 
 
 ## Local execution record
@@ -109,3 +109,10 @@ Helper contracts:
 - Parent verification: 14 tests, build, project typecheck, Python/Bash syntax, workflow lint, committed source archive and generated-artifact comparison passed. Read-only live GitHub history confirms the first-release absence path.
 - Package version remains `0.11.6`; product dependencies, lockfile and tsconfig are unchanged. No push, merge, beta branch, release or remote protection/settings change has been performed.
 - Final whole-branch review and owner handoff follow the completed implementation tasks; remote activation is a separate decision.
+
+
+### Final verification and handoff status
+
+Final whole-branch review by `gpt-6-luna`/high passed at `04ffd66` with no actionable findings. The local implementation and all task/fix reviews are complete. The reviewed source archive was verified again. The temporary execution workspace was removed after confirming it contained no tracked files; no discretionary rulings or parked findings remain.
+
+The PR description is prepared locally at `out/delivery-pr-body.md` (ignored). Working branch: `codex/delivery-workflow-ci`; this concrete branch name is not a naming policy. The managed worktree is preserved for the owner to approve push/PR creation and subsequent hosted CI. No merge, Stable release or GitHub protection activation has occurred.
