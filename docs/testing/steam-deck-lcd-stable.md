@@ -10,6 +10,8 @@ Capture the exact SteamOS version/build and Stable channel, kernel, WiFi adapter
 
 "Latest Decky" and "Stable SteamOS" alone are not reproducible version identifiers. Device screenshots or a read-only diagnostic inventory can supply the values; inspect diagnostic output before sharing it and omit network credentials.
 
+Use the [standalone inventory procedure](collect-inventory.md) to observe the existing installation without plugin IPC or configuration changes. It does not replace private recovery backups or a controlled comparison.
+
 ## Establish baseline and recovery
 
 1. Before installation or changing any option, record the current NM profile fields, relevant config files, services/backend, driver/sysfs power values, sysctl values and qdisc/queue settings identified by the audit. Keep recoverable copies of configuration the tests will modify.

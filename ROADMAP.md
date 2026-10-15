@@ -13,6 +13,7 @@ The fork's next product goal is to make a loss of connectivity visible during ga
 - Compare the unmodified device baseline with individual optimizations on the owner's **Steam Deck LCD / SteamOS Stable**. Record exact OS, kernel, driver and Decky versions. Beta testing is an optional later compatibility exercise.
 - Correct unsupported claims about universal benefit, battery cost and hardware coverage. Add regression tests for confirmed defects as fixes are made.
 - Establish the owner-selected `WiFi Optimizer TMS` / `wifi-optimizer-tms` identity before the first fork Stable release. The [rename design](docs/superpowers/specs/2026-10-15-tms-identity-design.md) proposes preserving installation/settings paths and coordinating GitHub cutover with corrected installation/update flows; implementation and device evidence are pending.
+- Prepare the [read-only device inventory](docs/testing/collect-inventory.md) and review the [first recovery package](docs/superpowers/specs/2026-10-15-delivery-recovery-design.md) for installation/update findings. The recovery engine and networking fixes remain pending; preparation does not close findings.
 
 The first Stable release of this fork and implementation of Connection Watchdog follow Stage 0. Close this stage only after the audit covers the selected commit, all Critical/Important findings are fixed and reviewed, device results are recorded for the release candidate, and a remaining-limitations list supports the claimed hardware/OS coverage. Repeat affected checks if subsequent changes invalidate that evidence.
 
