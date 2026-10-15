@@ -5,13 +5,145 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import re
 import shutil
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 from typing import Any
 
 DECKY_PREFIX = "decky://decky/plugin/WiFi%20Optimizer/"
+REPOSITORY = "undefined3491/WifiOptimizer"
+SHIPPED_FILES = (
+    "plugin.json", "package.json", "main.py", "decky.pyi", "dist/index.js",
+    "dist/index.js.map", "defaults/dispatcher.sh.tmpl",
+)
+
+
+def _stable_version(version: str) -> tuple[int, int, int]:
+    if not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version):
+        raise ValueError(f"invalid Stable version: {version!r}")
+    return tuple(int(part) for part in version.split("."))
+
+
+def validate_release(root: Path, version: str, ref: str, repository: str, deck_tested: bool) -> str:
+    _stable_version(version)
+    if ref != "main":
+        raise ValueError("Stable releases can only be dispatched from main")
+    if repository != REPOSITORY:
+        raise ValueError(f"release repository must be {REPOSITORY}")
+    if not deck_tested:
+        raise ValueError("supported-device smoke test attestation is required")
+    try:
+        package = json.loads((root / "package.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read package version: {exc}") from exc
+    if not isinstance(package, dict) or package.get("version") != version:
+        raise ValueError("release version does not match package.json")
+    try:
+        changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"cannot read changelog: {exc}") from exc
+    release_notes(changelog, version)
+    return f"v{version}"
+
+
+def validate_release_history(version: str, latest_version: str | None, existing_tag: bool, existing_release: bool) -> None:
+    candidate = _stable_version(version)
+    if existing_tag or existing_release:
+        raise ValueError("candidate tag or release already exists")
+    if latest_version is not None:
+        try:
+            latest = _stable_version(latest_version)
+        except ValueError as exc:
+            raise ValueError("latest Stable release has an invalid version") from exc
+        if candidate <= latest:
+            raise ValueError("Stable version must be greater than the latest release")
+
+
+def _gh_api(repository: str, endpoint: str) -> tuple[int, str]:
+    if repository != REPOSITORY:
+        raise ValueError(f"release repository must be {REPOSITORY}")
+    try:
+        result = subprocess.run(["gh", "api", "--include", f"repos/{repository}/{endpoint}"], capture_output=True, text=True, check=False)
+    except OSError as exc:
+        raise ValueError("GitHub CLI is unavailable for release history checks") from exc
+    combined = f"{result.stdout}\n{result.stderr}"
+    matches = re.findall(r"HTTP/\S+\s+(\d{3})|HTTP (\d{3})", combined)
+    status = int(next((a or b for a, b in reversed(matches)), "0"))
+    if status == 404:
+        return status, ""
+    if result.returncode != 0 or status < 200 or status >= 300:
+        raise ValueError(f"GitHub API request failed with HTTP {status or 'unknown'}")
+    body = result.stdout.split("\r\n\r\n", 1)[-1].split("\n\n", 1)[-1]
+    try:
+        json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise ValueError("GitHub API returned invalid JSON") from exc
+    return status, body
+
+
+def get_release_history(repository: str, version: str) -> tuple[str | None, bool, bool]:
+    tag = "v" + version
+    _stable_version(version)
+    latest_status, latest_body = _gh_api(repository, "releases/latest")
+    if latest_status == 404:
+        latest = None
+    else:
+        latest_data = json.loads(latest_body)
+        latest_tag = latest_data.get("tag_name") if isinstance(latest_data, dict) else None
+        if not isinstance(latest_tag, str) or not latest_tag.startswith("v"):
+            raise ValueError("latest release response has no Stable tag")
+        latest = latest_tag[1:]
+    tag_status, _ = _gh_api(repository, f"git/ref/tags/{tag}")
+    release_status, _ = _gh_api(repository, f"releases/tags/{tag}")
+    return latest, tag_status != 404, release_status != 404
+
+
+def verify_archive(archive: Path, version: str) -> None:
+    _stable_version(version)
+    expected_root = f"WifiOptimizer-{version}"
+    found: set[str] = set()
+    seen: set[str] = set()
+    try:
+        with tarfile.open(archive, "r:*") as tar:
+            for member in tar.getmembers():
+                name = member.name.rstrip("/") if member.isdir() else member.name
+                parts = name.split("/")
+                if name.startswith("/") or "\\" in name or any(part in {"", ".", ".."} for part in parts):
+                    raise ValueError(f"unsafe archive path: {name!r}")
+                if parts[0] != expected_root or len(parts) == 1 and not member.isdir():
+                    raise ValueError("archive does not have the exact release root")
+                if name in seen:
+                    raise ValueError(f"duplicate archive entry: {name}")
+                seen.add(name)
+                if not member.isdir() and not member.isfile():
+                    raise ValueError(f"unsupported archive entry type: {name}")
+                if member.isfile():
+                    relative = "/".join(parts[1:])
+                    if relative in SHIPPED_FILES:
+                        found.add(relative)
+    except (OSError, tarfile.TarError) as exc:
+        raise ValueError(f"cannot inspect source archive: {exc}") from exc
+    missing = sorted(set(SHIPPED_FILES) - found)
+    if missing:
+        raise ValueError("archive is missing shipped files: " + ", ".join(missing))
+
+
+def release_notes(changelog: str, version: str) -> str:
+    _stable_version(version)
+    lines = changelog.splitlines()
+    heading = f"## [{version}]"
+    starts = [index for index, line in enumerate(lines) if line.strip() == heading]
+    if len(starts) != 1:
+        raise ValueError(f"changelog must contain exactly one section for {version}")
+    start = starts[0] + 1
+    end = next((index for index in range(start, len(lines)) if lines[index].startswith("## ")), len(lines))
+    notes = "\n".join(lines[start:end]).strip()
+    if not notes:
+        raise ValueError(f"changelog section for {version} is empty")
+    return notes
 
 
 def _json_map(path: Path) -> dict[str, Any]:
@@ -196,6 +328,20 @@ def main(argv: list[str] | None = None) -> int:
     snapshot_parser.add_argument("--output", type=Path, required=True)
     verify_parser = sub.add_parser("verify-dist")
     verify_parser.add_argument("--snapshot", type=Path, required=True)
+    release_parser = sub.add_parser("validate-release")
+    release_parser.add_argument("--version", required=True)
+    release_parser.add_argument("--ref", required=True)
+    release_parser.add_argument("--repository", required=True)
+    release_parser.add_argument("--deck-tested", choices=("true", "false"), required=True)
+    archive_parser = sub.add_parser("verify-archive")
+    archive_parser.add_argument("--archive", type=Path, required=True)
+    archive_parser.add_argument("--version", required=True)
+    history_parser = sub.add_parser("release-history")
+    history_parser.add_argument("--version", required=True)
+    history_parser.add_argument("--repository", required=True)
+    notes_parser = sub.add_parser("release-notes")
+    notes_parser.add_argument("--version", required=True)
+    notes_parser.add_argument("--output", type=Path, required=True)
     sub.add_parser("check-syntax")
     args = parser.parse_args(argv)
     root = Path.cwd()
@@ -204,6 +350,21 @@ def main(argv: list[str] | None = None) -> int:
             snapshot_dist(root, args.output)
         elif args.command == "verify-dist":
             verify_dist(root, args.snapshot)
+        elif args.command == "validate-release":
+            print(validate_release(root, args.version, args.ref, args.repository, args.deck_tested == "true"))
+        elif args.command == "verify-archive":
+            verify_archive(args.archive, args.version)
+        elif args.command == "release-history":
+            history = get_release_history(args.repository, args.version)
+            validate_release_history(args.version, *history)
+            print(json.dumps(history))
+        elif args.command == "release-notes":
+            try:
+                notes = release_notes((root / "CHANGELOG.md").read_text(encoding="utf-8"), args.version)
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.output.write_text(notes + "\n", encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                raise ValueError(f"cannot write release notes: {exc}") from exc
         else:
             check_python_and_shell(root)
     except ValueError as exc:

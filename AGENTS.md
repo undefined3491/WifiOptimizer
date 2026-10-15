@@ -9,7 +9,7 @@ Decky plugin (Steam Deck / handhelds): React TS frontend + Python backend (runs 
 - Publishing is separate from merging. Bump the version when preparing a release: patch for fixes, minor for features. Documentation/CI-only changes do not require their own release. Stable publication requires a manual decision and a smoke test on a supported device, including reconnect and sleep/wake for networking changes.
 - Stable releases must use `v<package.json version>` and include rebuilt, tracked `dist` files in that exact tagged commit. Maintain `beta` only when pre-release testing is needed; the current Beta updater consumes a branch, not GitHub pre-release assets.
 - Operational instructions: [CONTRIBUTING.md](CONTRIBUTING.md). Design rationale and acceptance checks: [delivery workflow spec](docs/superpowers/specs/2026-10-15-delivery-workflow-design.md); execution detail: [rollout plan](docs/superpowers/plans/2026-10-15-delivery-workflow.md).
-- Current rollout status: contribution and release documentation is in place. CI/release workflows and GitHub protection are not active yet. Verify repository settings and actual Actions runs before claiming enforcement.
+- Current rollout status: local CI/release implementation and operational documentation are in place on the working branch. Workflows are not active on the default branch until merged; GitHub protection/settings remain unapplied. Verify repository settings and actual Actions runs before claiming enforcement.
 
 ## Repository and updates
 
