@@ -1,3 +1,4 @@
+import ast
 import json
 import tempfile
 import unittest
@@ -9,6 +10,7 @@ from scripts.check_delivery import (
     snapshot_dist,
     verify_dist,
     check_python_and_shell,
+    _render_update_fstring,
 )
 
 
@@ -114,6 +116,24 @@ class DistTests(unittest.TestCase):
 
 
 class SyntaxTests(unittest.TestCase):
+    def test_rejects_unrendered_fstring_conversions_and_format_specs(self):
+        for expression, message in (("value!r", "conversion"), ("value:>10", "format specifier")):
+            with self.subTest(expression=expression), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                (root / "defaults").mkdir()
+                main = (
+                    "class Plugin:\n"
+                    "    async def apply_update(self):\n"
+                    "        value = 'example'\n"
+                    f"        script = f'''echo {{{expression}}}\\n'''\n"
+                )
+                (root / "main.py").write_text(main, encoding="utf-8")
+                (root / "decky.pyi").write_text("class Plugin: ...\n", encoding="utf-8")
+                (root / "install.sh").write_text("#!/bin/bash\ntrue\n", encoding="utf-8")
+                (root / "defaults/dispatcher.sh.tmpl").write_text("#!/bin/bash\ntrue\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, message):
+                    _render_update_fstring(ast.parse(main, filename="main.py"))
+
     def test_rejects_malformed_generated_update_script(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

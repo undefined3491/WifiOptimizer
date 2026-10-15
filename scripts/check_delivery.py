@@ -147,6 +147,10 @@ def _render_update_fstring(tree: ast.Module) -> str:
         if isinstance(value, ast.Constant) and isinstance(value.value, str):
             pieces.append(value.value)
         elif isinstance(value, ast.FormattedValue):
+            if value.conversion != -1:
+                raise ValueError("unsupported conversion in generated update script f-string")
+            if value.format_spec is not None:
+                raise ValueError("unsupported format specifier in generated update script f-string")
             # All interpolation points are replaced with inert shell-safe text.
             pieces.append("fixture")
         else:
