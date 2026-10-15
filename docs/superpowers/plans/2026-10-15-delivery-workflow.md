@@ -1,6 +1,6 @@
 # Delivery Workflow Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Preserve the owner's delivery policy across sessions and add verifiable PR checks plus a separate manually triggered Stable release workflow.
 
@@ -10,7 +10,7 @@
 
 **Spec:** [Delivery workflow design](../specs/2026-10-15-delivery-workflow-design.md).
 
-**Status:** Approved by the owner on 2026-10-15; implementation is in progress. Owner steering removes any mandatory branch-name prefix and requires push CI on all branches.
+**Status:** Approved by the owner on 2026-10-15; all three implementation tasks are complete locally and have passed task review. Hosted CI and remote activation remain pending. Owner steering removes any mandatory branch-name prefix and requires push CI on all branches.
 
 ## Global Constraints
 
@@ -33,10 +33,10 @@
 
 ## Setup and recovery
 
-- [ ] Read the spec and this plan; verify branch/history, existing commits, local instructions and any plan ledger before dispatching work.
-- [ ] Use `using-git-worktrees` and the native managed-worktree tool to isolate execution from the planning checkout, starting from the reviewed `codex/delivery-workflow` state. Install with pnpm 9 and establish the documented build/typecheck baseline.
-- [ ] Use the SDD skill's workspace script for this plan; initialize its ledger and record preflight task/interface conflicts. User approval of this plan includes the described isolated workspace setup.
-- [ ] Record the spec/plan approval and exact execution branch/base SHA. Each implementation task gets its extracted task brief and a report path, followed by an independent task review.
+- [x] Read the spec and this plan; verify branch/history, existing commits, local instructions and any plan ledger before dispatching work.
+- [x] Use `using-git-worktrees` and the native managed-worktree tool to isolate execution from the planning checkout, starting from the reviewed `codex/delivery-workflow` state. Install with pnpm 9 and establish the documented build/typecheck baseline.
+- [x] Use the SDD skill's workspace script for this plan; initialize its ledger and record preflight task/interface conflicts. User approval of this plan includes the described isolated workspace setup.
+- [x] Record the spec/plan approval and exact execution branch/base SHA. Each implementation task gets its extracted task brief and a report path, followed by an independent task review.
 
 ### Task 1: Contributor runbook and durable delivery policy
 
@@ -44,11 +44,11 @@
 
 **Interfaces:** Consumes the agreed spec and existing fork fixes. Produces policy/runbook links, changelog release-heading convention `## [<version>]`, and LF text policy consumed by Tasks 2/3. Reference future workflow/check filenames exactly; clearly mark unactivated remote settings.
 
-- [ ] Write `CONTRIBUTING.md` covering PR/squash/review, pnpm 9 checks, committed dist, version preparation, manual device checklist, Stable/Beta updater semantics, and activation order. Use the spec's exact workflow/check names; zero mandatory external approvals for solo maintenance.
-- [ ] Add changelog `Unreleased` notes for the existing fork URL fixes. No release date/version section is invented and `package.json` stays `0.11.6`.
-- [ ] Add the PR template and `* text=auto eol=lf`. Do not run mass-renormalization. Update README links and AGENTS authority/runbook links while retaining architecture gotchas and truthful rollout status.
-- [ ] Verify every local documentation link points to an existing file, except explicitly labelled future implementation files. Check policy consistency against all spec sections and run `git diff --check`.
-- [ ] Commit only task-owned files; report commit SHA, verification and any limitations. Dispatch independent task review; fix confirmed Important/Critical findings through the implementer.
+- [x] Write `CONTRIBUTING.md` covering PR/squash/review, pnpm 9 checks, committed dist, version preparation, manual device checklist, Stable/Beta updater semantics, and activation order. Use the spec's exact workflow/check names; zero mandatory external approvals for solo maintenance.
+- [x] Add changelog `Unreleased` notes for the existing fork URL fixes. No release date/version section is invented and `package.json` stays `0.11.6`.
+- [x] Add the PR template and `* text=auto eol=lf`. Do not run mass-renormalization. Update README links and AGENTS authority/runbook links while retaining architecture gotchas and truthful rollout status.
+- [x] Verify every local documentation link points to an existing file, except explicitly labelled future implementation files. Check policy consistency against all spec sections and run `git diff --check`.
+- [x] Commit only task-owned files; report commit SHA, verification and any limitations. Dispatch independent task review; fix confirmed Important/Critical findings through the implementer.
 
 ### Task 2: Shared CI verification and required PR check
 
@@ -64,12 +64,12 @@ Public helper contracts (raise `ValueError` with actionable messages on invalid 
 - `verify_dist(root: Path, snapshot: Path) -> None`: reject changed bundle/map after semantic normalization.
 - `check_python_and_shell(root: Path) -> None`: AST-parse backend/stub, extract/render only the known update-script f-string with harmless values, and run Bash syntax parsing without executing scripts.
 
-- [ ] Add standard-library `unittest` cases for equivalent Decky/relative map prefixes and CRLF, changed mappings/source contents/JS, unsupported paths, missing bundle/map and stale embedded sources. Add a malformed generated-update-script fixture for the syntax validator. Run `python -m unittest discover -s tests -v`; first observe failures for missing functionality.
-- [ ] Implement the specified CLI/helpers using standard libraries. Validate snapshot/map structure and return nonzero actionable CLI errors; avoid plugin imports, backend execution and broad directory changes.
-- [ ] Add the composite action using the spec's pinned checkout-independent setup-node/setup-python actions, Node 24, Python 3.11 and pnpm 9.15.9. Run snapshot before build, frozen install, build, typecheck, validators/tests, and verify-dist. Temporary files go under `RUNNER_TEMP`; no generated fixes are committed automatically.
-- [ ] Add the read-only `ci.yml`: all PRs to main and pushes to all branches regardless of their names, job `ci-required`, bounded timeout, cancellation of superseded branch runs, no branch-name/path filter on pushes and no `pull_request_target`. Checkout uses the spec's pinned action.
-- [ ] Run all validator tests and local build/typecheck. Verify the committed baseline passes artifact checks, deliberately stale temporary fixtures fail, workflow YAML parses, and the required job name/triggers/permissions match the spec. Account for source-map URI/EOL portability instead of blindly comparing raw map bytes.
-- [ ] Commit task-owned files and complete independent task review before Task 3 starts. Keep `package.json`, lockfile and product logic unchanged.
+- [x] Add standard-library `unittest` cases for equivalent Decky/relative map prefixes and CRLF, changed mappings/source contents/JS, unsupported paths, missing bundle/map and stale embedded sources. Add a malformed generated-update-script fixture for the syntax validator. Run `python -m unittest discover -s tests -v`; first observe failures for missing functionality.
+- [x] Implement the specified CLI/helpers using standard libraries. Validate snapshot/map structure and return nonzero actionable CLI errors; avoid plugin imports, backend execution and broad directory changes.
+- [x] Add the composite action using the spec's pinned checkout-independent setup-node/setup-python actions, Node 24, Python 3.11 and pnpm 9.15.9. Run snapshot before build, frozen install, build, typecheck, validators/tests, and verify-dist. Temporary files go under `RUNNER_TEMP`; no generated fixes are committed automatically.
+- [x] Add the read-only `ci.yml`: all PRs to main and pushes to all branches regardless of their names, job `ci-required`, bounded timeout, cancellation of superseded branch runs, no branch-name/path filter on pushes and no `pull_request_target`. Checkout uses the spec's pinned action.
+- [x] Run all validator tests and local build/typecheck. Verify the committed baseline passes artifact checks, deliberately stale temporary fixtures fail, workflow YAML parses, and the required job name/triggers/permissions match the spec. Account for source-map URI/EOL portability instead of blindly comparing raw map bytes.
+- [x] Commit task-owned files and complete independent task review before Task 3 starts. Keep `package.json`, lockfile and product logic unchanged.
 
 ### Task 3: Manual Stable release and protection configuration
 
@@ -85,12 +85,12 @@ Helper contracts:
 - `verify_archive(archive: Path, version: str) -> None`: inspect tar entries without extracting/executing them; require the exact archive root and all seven shipped files named by the spec, rejecting missing/duplicate/unsafe paths.
 - `release_notes(changelog: str, version: str) -> str`: return only that version's nonempty changelog section for publication.
 
-- [ ] First add/run failing tests for malformed/leading-zero/prerelease/mismatched versions, wrong repo/ref, false attestation, absent changelog section, duplicate tag/release, non-increasing versions, non-404 API failures, missing/duplicate/unsafe archive entries and notes-section boundaries.
-- [ ] Implement validators/CLI and extend tests to green. Use environment variables for workflow inputs; never evaluate untrusted shell expressions. Keep remote release creation outside the validators and make validation read-only.
-- [ ] Add `release.yml` with only manual dispatch, required `version`/`deck_tested`, exact dispatch-SHA checkout, serialized release concurrency, shared verification, release-history/archive checks, and a dependent publication job. Only publication has `contents: write`. Create tag/release at the tested SHA and extract notes from the changelog; refuse duplicates and never retag. No hardware-test claims beyond the maintainer attestation.
-- [ ] Add desired main ruleset JSON: PR required, zero required human approvals, resolved conversations, strict `ci-required`, no deletion/force push or routine bypass. Add settings JSON enabling squash only and merged-branch deletion. Validate against current official GitHub API schema; do not apply either file remotely yet.
-- [ ] Finalize runbook commands and activation checklist: first successful actual PR CI, verify check context, owner-reviewed merge/settings activation, read-back remote configuration. Mark local implementation and remote activation as separate states. No version bump, beta creation or release during rollout.
-- [ ] Run complete unit suite, build/typecheck, Python/Bash/workflow syntax checks, generated-artifact validation and `git diff --check`. Review the exact publication SHA propagation and token permission boundaries. Commit and complete independent task review.
+- [x] First add/run failing tests for malformed/leading-zero/prerelease/mismatched versions, wrong repo/ref, false attestation, absent changelog section, duplicate tag/release, non-increasing versions, non-404 API failures, missing/duplicate/unsafe archive entries and notes-section boundaries.
+- [x] Implement validators/CLI and extend tests to green. Use environment variables for workflow inputs; never evaluate untrusted shell expressions. Keep remote release creation outside the validators and make validation read-only.
+- [x] Add `release.yml` with only manual dispatch, required `version`/`deck_tested`, exact dispatch-SHA checkout, serialized release concurrency, shared verification, release-history/archive checks, and a dependent publication job. Only publication has `contents: write`. Create tag/release at the tested SHA and extract notes from the changelog; refuse duplicates and never retag. No hardware-test claims beyond the maintainer attestation.
+- [x] Add desired main ruleset JSON: PR required, zero required human approvals, resolved conversations, strict `ci-required`, no deletion/force push or routine bypass. Add settings JSON enabling squash only and merged-branch deletion. Validate against current official GitHub API schema; do not apply either file remotely yet.
+- [x] Finalize runbook commands and activation checklist: first successful actual PR CI, verify check context, owner-reviewed merge/settings activation, read-back remote configuration. Mark local implementation and remote activation as separate states. No version bump, beta creation or release during rollout.
+- [x] Run complete unit suite, build/typecheck, Python/Bash/workflow syntax checks, generated-artifact validation and `git diff --check`. Review the exact publication SHA propagation and token permission boundaries. Commit and complete independent task review.
 
 ## Final verification and handoff
 
@@ -99,3 +99,13 @@ Helper contracts:
 - [ ] Prepare a PR-ready branch and concise description with validation evidence, known full-tsc limitation, device-test requirements and inactive protection status. Do not describe local checks as successful hosted Actions runs.
 - [ ] Present the reviewed result for the final owner decision on pushing/merging and remote protection activation. Stable release remains a separate future maintainer action.
 - [ ] Preserve required execution rulings in the handoff and clean only this plan's ignored SDD workspace after its final review is clean, following the skill's path-safety rules.
+
+
+## Local execution record
+
+- Task 1: `505b20e` — contributor runbook, durable policy and LF rules; task review passed.
+- Task 2: `e442c44` / `877bac3` — shared CI and validators, unrestricted branch naming, formatting regression fix; task and scoped fix reviews passed. The interim scratch report commit was removed from the final tree.
+- Task 3: `3dfb4c4` / `0668557` — manual Stable release, desired GitHub settings, strict full-ref and API-header validation; task and scoped fix reviews passed.
+- Parent verification: 14 tests, build, project typecheck, Python/Bash syntax, workflow lint, committed source archive and generated-artifact comparison passed. Read-only live GitHub history confirms the first-release absence path.
+- Package version remains `0.11.6`; product dependencies, lockfile and tsconfig are unchanged. No push, merge, beta branch, release or remote protection/settings change has been performed.
+- Final whole-branch review and owner handoff follow the completed implementation tasks; remote activation is a separate decision.

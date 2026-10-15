@@ -2,7 +2,7 @@
 
 Date: 2026-10-15
 
-Status: The owner approved this spec and its implementation plan on 2026-10-15. Implementation is in progress. The owner subsequently clarified that working-branch names must remain tool-neutral and unrestricted.
+Status: The owner approved this spec and its implementation plan on 2026-10-15. The implementation is complete locally, with hosted CI and remote activation pending. The owner subsequently clarified that working-branch names must remain tool-neutral and unrestricted.
 
 ## Purpose and authority
 
