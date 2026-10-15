@@ -10,7 +10,7 @@
 
 **Spec:** [Delivery workflow design](../specs/2026-10-15-delivery-workflow-design.md).
 
-**Status:** Approved by the owner on 2026-10-15; all three implementation tasks are complete and reviewed. PR #1 is open on this fork and initial hosted CI passed. Merge and remote protection/settings activation remain pending. Owner steering removes any mandatory branch-name prefix and requires push CI on all branches.
+**Status:** Approved by the owner on 2026-10-15; all three implementation tasks are complete and reviewed. PR #1 was squash merged as `e957c5b` and main CI passed. Remote protection/settings activation remains pending. Owner steering removes any mandatory branch-name prefix and requires push CI on all branches. Subsequent first-release prerequisites are recorded in the [audit-first roadmap](../../../ROADMAP.md).
 
 ## Global Constraints
 
@@ -97,7 +97,8 @@ Helper contracts:
 - [x] Dispatch a fresh `gpt-6-luna`/high whole-branch reviewer using the SDD final-review package and ledger; resolve confirmed blocking findings via one implementer fix wave plus scoped re-review.
 - [x] Verify tracked archive contents for the implementation commit, documentation links, unchanged product version/dependencies/lockfile, and settled policy consistency.
 - [x] Prepare a PR-ready branch and concise description with validation evidence, known full-tsc limitation, device-test requirements and inactive protection status. Do not describe local checks as successful hosted Actions runs.
-- [ ] Present the reviewed result for the final owner decision on pushing/merging and remote protection activation. Stable release remains a separate future maintainer action.
+- [x] Present the reviewed result and complete the owner-authorized fork PR squash merge.
+- [ ] Apply and read back remote protection/settings when authorized. Stable release remains a separate future maintainer action, now following Stage 0.
 - [x] Preserve required execution rulings in the handoff and clean only this plan's ignored SDD workspace after its final review is clean, following the skill's path-safety rules.
 
 
@@ -115,10 +116,10 @@ Helper contracts:
 
 Final whole-branch review by `gpt-6-luna`/high passed at `04ffd66` with no actionable findings. The local implementation and all task/fix reviews are complete. The reviewed source archive was verified again. The temporary execution workspace was removed after confirming it contained no tracked files; no discretionary rulings or parked findings remain.
 
-The PR description is stored locally at `out/delivery-pr-body.md` (ignored). Working branch: `codex/delivery-workflow-ci`; this concrete branch name is not a naming policy. The managed worktree is preserved for PR iteration. No merge, Stable release or GitHub protection activation has occurred.
+At the pre-merge handoff, the PR description was stored locally at `out/delivery-pr-body.md` (ignored), and the working branch was `codex/delivery-workflow-ci`; that concrete branch name is not a naming policy. The managed worktree was preserved for PR iteration. No merge, Stable release or GitHub protection activation had occurred at that stage.
 
 ### Fork PR and hosted CI — 2026-10-15
 
 The owner approved pushing the working branch and creating the PR, explicitly confirming that it targets this fork. [PR #1](https://github.com/undefined3491/WifiOptimizer/pull/1) has both head and base in `undefined3491/WifiOptimizer`, with base branch `main`.
 
-Hosted GitHub Actions checks for initial commit `9618b9f` passed on both [push](https://github.com/undefined3491/WifiOptimizer/actions/runs/38753431821) and [pull_request](https://github.com/undefined3491/WifiOptimizer/actions/runs/38753432011). The actual check context is `ci-required` from GitHub Actions app ID `15368`. Verify subsequent commits' checks before merging. Merge and protection/settings activation still require the owner's final decision; Stable publication remains separate.
+Hosted GitHub Actions checks for initial commit `9618b9f` passed on both [push](https://github.com/undefined3491/WifiOptimizer/actions/runs/38753431821) and [pull_request](https://github.com/undefined3491/WifiOptimizer/actions/runs/38753432011). The actual check context is `ci-required` from GitHub Actions app ID `15368`. The final PR head `4b2021f` also passed push and PR checks and a fresh pre-merge review. The owner authorized review and merge; PR #1 was squash merged as `e957c5b`, with successful [main CI](https://github.com/undefined3491/WifiOptimizer/actions/runs/38754879160). Its remote working branch was removed. Protection/settings activation and Stable publication remain separate pending work; the owner's later direction places the inherited-code audit and LCD / Stable validation before the first fork Stable release.

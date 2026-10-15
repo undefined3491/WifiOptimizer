@@ -9,7 +9,15 @@ Decky plugin (Steam Deck / handhelds): React TS frontend + Python backend (runs 
 - Publishing is separate from merging. Bump the version when preparing a release: patch for fixes, minor for features. Documentation/CI-only changes do not require their own release. Stable publication requires a manual decision and a smoke test on a supported device, including reconnect and sleep/wake for networking changes.
 - Stable releases must use `v<package.json version>` and include rebuilt, tracked `dist` files in that exact tagged commit. Maintain `beta` only when pre-release testing is needed; the current Beta updater consumes a branch, not GitHub pre-release assets.
 - Operational instructions: [CONTRIBUTING.md](CONTRIBUTING.md). Design rationale and acceptance checks: [delivery workflow spec](docs/superpowers/specs/2026-10-15-delivery-workflow-design.md); execution detail: [rollout plan](docs/superpowers/plans/2026-10-15-delivery-workflow.md).
-- Current rollout status: the implementation is pushed in [PR #1](https://github.com/undefined3491/WifiOptimizer/pull/1), targeting this fork's `main`. Hosted `ci-required` checks passed for both push and PR on the initial implementation commit. Merge and GitHub protection/settings activation remain pending. Verify the latest PR checks and repository settings before claiming enforcement.
+- Delivery rollout record (2026-10-15): [PR #1](https://github.com/undefined3491/WifiOptimizer/pull/1) was squash merged into this fork's `main` as `e957c5b`; [main CI passed](https://github.com/undefined3491/WifiOptimizer/actions/runs/38754879160). Remote ruleset/settings activation remains separate: at the last read-back, rulesets were empty and squash-only/automatic branch deletion settings were unapplied. Verify actual GitHub settings before claiming enforcement.
+
+## Development priority — Stage 0 first
+
+- Complete the inherited-code audit and LCD / SteamOS Stable validation before the first Stable release of this fork or implementation of Connection Watchdog. This is the owner's revised development order; delivery-tooling review/CI is not a full audit of the inherited optimizations.
+- Follow [ROADMAP.md](ROADMAP.md), the [Stage 0 audit record](docs/audits/2026-10-15-stage-0.md) and [device protocol](docs/testing/steam-deck-lcd-stable.md). Keep confirmed behavior, hypotheses, fixes and device results distinct; do not mark Stage 0 complete from static checks alone.
+- The owner can test on a Steam Deck LCD using SteamOS Stable. Capture exact installed OS/kernel/driver/backend/Decky versions; "latest" is not a version. Beta/Preview is optional later compatibility coverage, not a replacement for Stable tests. Other hardware/distributions remain unverified in this fork until results are recorded.
+- Reassess each optimization against current official SteamOS notes and actual device behavior. A vendor fix is a reason to investigate relevance, not proof that a tweak is obsolete or safe. Record dated primary sources and separate Stable from Beta/Preview.
+- Resolve all Critical/Important audit findings and record candidate-specific device evidence before preparing the first Stable release. Keep release scope/version provisional until the audit determines the required fixes. Revisit affected compatibility evidence after relevant OS, driver or Decky changes.
 
 ## Repository and updates
 

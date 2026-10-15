@@ -2,7 +2,7 @@
 
 Date: 2026-10-15
 
-Status: The owner approved this spec and its implementation plan on 2026-10-15. The implementation is complete and pushed in PR #1 on this fork; initial hosted CI passed. Merge and remote protection/settings activation remain pending. The owner clarified that working-branch names must remain tool-neutral and unrestricted.
+Status: The owner approved this spec and its implementation plan on 2026-10-15. PR #1 was squash merged into this fork's `main` as `e957c5b` and main CI passed. Remote protection/settings activation remains pending. Working-branch names remain tool-neutral and unrestricted. The owner's subsequent [audit-first roadmap](../../../ROADMAP.md) adds Stage 0 before the first fork Stable release; the delivery mechanics below remain in effect.
 
 ## Purpose and authority
 
