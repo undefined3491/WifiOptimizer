@@ -2,7 +2,7 @@
 
 Date: 2026-10-15
 
-Status: The owner approved this spec and its implementation plan on 2026-10-15. PR #1 was squash merged into this fork's `main` as `e957c5b` and main CI passed. Remote protection/settings activation remains pending. Working-branch names remain tool-neutral and unrestricted. The owner's subsequent [audit-first roadmap](../../../ROADMAP.md) adds Stage 0 before the first fork Stable release; the delivery mechanics below remain in effect.
+Status: The owner approved this spec and its implementation plan on 2026-10-15. PR #1 was squash merged into this fork's `main` as `e957c5b` and main CI passed. Remote protection/settings activation remains pending. The owner's latest reissued AGENTS.md requires `codex/<change>` branches, superseding the earlier unrestricted naming decision. The subsequent [audit-first roadmap](../../../ROADMAP.md) adds Stage 0 before the first fork Stable release; the remaining delivery mechanics below stay in effect.
 
 ## Purpose and authority
 
@@ -21,7 +21,7 @@ Make contribution and release decisions durable across sessions and enforce the 
 
 ## Chosen contribution policy
 
-1. Changes use a short-lived working branch and a PR targeting `main`. Branch names are unrestricted and independent of the development environment; `feat/`, `fix/`, and `chore/` are optional examples, not required prefixes.
+1. Changes use a short-lived `codex/<change>` branch and a PR targeting `main`, following the owner's latest reissued AGENTS.md. The original rollout allowed unrestricted names; that earlier preference is superseded for new work.
 2. The required check is named exactly `ci-required`. Review is completed before squash merge. Zero mandatory human approvals allows a solo maintainer to work; it does not waive code review.
 3. `main` is protected against deletion, force push, and changes that bypass the PR/check requirements. Repository merge settings allow squash merge and remove merged branches; merge commits and rebase merge are disabled.
 4. Merging changes does not publish releases. Version preparation is a separate PR, or part of a PR explicitly designated for release preparation.

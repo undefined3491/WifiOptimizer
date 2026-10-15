@@ -10,12 +10,12 @@
 
 **Spec:** [Delivery workflow design](../specs/2026-10-15-delivery-workflow-design.md).
 
-**Status:** Approved by the owner on 2026-10-15; all three implementation tasks are complete and reviewed. PR #1 was squash merged as `e957c5b` and main CI passed. Remote protection/settings activation remains pending. Owner steering removes any mandatory branch-name prefix and requires push CI on all branches. Subsequent first-release prerequisites are recorded in the [audit-first roadmap](../../../ROADMAP.md).
+**Status:** Approved by the owner on 2026-10-15; all three implementation tasks are complete and reviewed. PR #1 was squash merged as `e957c5b` and main CI passed. Remote protection/settings activation remains pending. The original rollout used unrestricted branch names; the owner's latest reissued AGENTS.md requires `codex/<change>` for new work. Push CI still runs on all branches. Subsequent first-release prerequisites are recorded in the [audit-first roadmap](../../../ROADMAP.md).
 
 ## Global Constraints
 
 - Repository: `undefined3491/WifiOptimizer`; default branch: `main`; version remains `0.11.6` during this rollout.
-- Short-lived working branch with any name -> PR -> required `ci-required` check and review -> squash merge. Branch naming is tool-neutral; optional `feat/`, `fix/`, or `chore/` examples impose no restriction. Stable publication is separate and manual.
+- Short-lived working branch -> PR -> required `ci-required` check and review -> squash merge. The completed rollout used unrestricted names; future work follows the owner's newer `codex/<change>` requirement. Stable publication is separate and manual.
 - No product dependency, lockfile, `tsconfig.json`, IPC or WiFi behavior changes. Never execute/import plugin runtime methods to validate CI.
 - CI: `ubuntu-24.04`, Node `24`, pnpm `9.15.9`, Python `3.11`; use `tsc --noEmit --skipLibCheck` for the documented dependency-declaration issue.
 - Use the three exact action SHA pins in the spec, read-only permissions by default and write permissions only in the release publication job.

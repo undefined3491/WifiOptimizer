@@ -6,7 +6,7 @@ The fork's next product goal is to make a loss of connectivity visible during ga
 
 ## Stage 0 — Audit and establish a baseline
 
-**Status: In progress — scope, initial observations and SteamOS release-note research recorded; full code audit and device validation pending.**
+**Status: In progress — static review completed; 14 Important and 9 Minor findings remain open, with fixes and device validation pending.** See the [consolidated report](docs/audits/2026-10-15-stage-0-findings.md). Static completion does not close Stage 0.
 
 - Review the inherited Python backend, shell installer/dispatcher and React frontend, including privileged writes, error handling, reconnects, update/install recovery, reset and uninstall.
 - Reassess every optimization against current SteamOS, drivers and measured behavior. Record a decision to retain, constrain, change or remove it, with evidence and tradeoffs.
@@ -16,6 +16,8 @@ The fork's next product goal is to make a loss of connectivity visible during ga
 The first Stable release of this fork and implementation of Connection Watchdog follow Stage 0. Close this stage only after the audit covers the selected commit, all Critical/Important findings are fixed and reviewed, device results are recorded for the release candidate, and a remaining-limitations list supports the claimed hardware/OS coverage. Repeat affected checks if subsequent changes invalidate that evidence.
 
 Scope, sources and findings: [Stage 0 audit record](docs/audits/2026-10-15-stage-0.md). Device procedure: [LCD / Stable validation](docs/testing/steam-deck-lcd-stable.md).
+
+Execution uses owner-selected `gpt-6.1-sol` audit subagents under the [audit specification](docs/superpowers/specs/2026-10-15-stage-0-audit-design.md) and [plan](docs/superpowers/plans/2026-10-15-stage-0-audit.md). Static review and device validation have separate completion criteria.
 
 ## Stage 1 — Connection Watchdog
 

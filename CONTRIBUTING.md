@@ -2,7 +2,7 @@
 
 ## Branches, pull requests, and review
 
-Use a short-lived feature branch with any clear name (for example, `feat/`, `fix/`, or `chore/`) and open a pull request targeting `main`. Complete review and the required `ci-required` check before merging by squash. Review is required even when one maintainer handles the change; there are zero mandatory external human approvals, so a solo maintainer can complete the process. Merged branches are removed.
+Use a short-lived `codex/<change>` branch, as required by the owner's latest instructions, and open a pull request targeting `main`. Complete review and the required `ci-required` check before merging by squash. Review is required even when one maintainer handles the change; there are zero mandatory external human approvals, so a solo maintainer can complete the process. Merged branches are removed.
 
 Merging does not publish a release. Documentation and CI-only changes do not need a version bump. Do not push directly to `main` or publish Stable automatically on merge.
 
@@ -23,6 +23,8 @@ The full type check without `--skipLibCheck` currently reports missing `react-ro
 ## Preparing a release
 
 The first Stable release of this fork follows [Stage 0 of the roadmap](ROADMAP.md): complete the inherited-code audit, resolve all Critical/Important findings and record candidate-specific LCD / SteamOS Stable results using the [device protocol](docs/testing/steam-deck-lcd-stable.md). The [audit record](docs/audits/2026-10-15-stage-0.md) defines closure and known coverage. Review of delivery tooling and successful CI alone do not close this stage. Subsequent relevant OS/driver/Decky changes require a targeted compatibility review and affected checks.
+
+The [static findings report](docs/audits/2026-10-15-stage-0-findings.md) is available; its open findings are not fixed by the documentation rollout. Release preparation must refer to their actual resolution and candidate-specific test evidence.
 
 Prepare a release in a dedicated PR or a PR explicitly designated for release preparation. Bump the package version by patch for fixes and minor for features, then add a matching `## [<version>]` section to `CHANGELOG.md`. Stable releases use tag `v<package.json version>` and must include rebuilt tracked dist files in that exact tagged commit. The release workflow is manually dispatched and requires the maintainer's device-test attestation; publication remains a manual decision after review and checks.
 

@@ -42,7 +42,7 @@ Installation and updates use this fork. The installer falls back to its `main` b
    - Tunes network buffers (handles streaming traffic bursts)
 3. Enabled options are reapplied through plugin startup and the reconnect dispatcher. Verify actual state and connection behavior after sleep/wake and updates.
 
-Want to go further? The remaining optimizations are available as individual toggles - each one has an **(i)** icon you can tap for a full explanation of what it does and any tradeoffs. Advanced options include forcing 5/6 GHz, custom DNS, disabling IPv6, CAKE traffic shaping, and switching between the `iwd` and `wpa_supplicant` WiFi backends.
+Want to go further? The remaining optimizations are available as individual toggles - each one has an **(i)** icon you can tap for an explanation of what it does and its tradeoffs. Advanced options include a 5 GHz band restriction, custom DNS, disabling IPv6, CAKE traffic shaping, and switching between the `iwd` and `wpa_supplicant` WiFi backends. The inherited UI's 6 GHz label does not provide a separate 6 GHz selection; this mismatch and other open runtime findings are recorded in the [Stage 0 audit](docs/audits/2026-10-15-stage-0-findings.md).
 
 ## All optimizations
 
@@ -59,7 +59,7 @@ Want to go further? The remaining optimizations are available as individual togg
 
 | Optimization | What it does | Why it's manual |
 |---|---|---|
-| Force 5 GHz / 6 GHz | Locks WiFi to the higher-frequency band to avoid Bluetooth interference | Won't connect if your network is 2.4 GHz only |
+| Force 5 GHz | Restricts the saved WiFi profile to the 5 GHz band | Won't connect if your network is 2.4 GHz only; the inherited 6 GHz UI claim is under correction |
 | Traffic shaping (CAKE) | Replaces the default network queue with CAKE for fair queuing, bufferbloat prevention, and ACK filtering. Does not limit bandwidth. | Replaces your system's default qdisc; resets on reboot |
 | Custom DNS | Overrides your ISP's DNS with Cloudflare, Google, Quad9, or custom servers | Requires choosing a provider |
 | Disable IPv6 | Forces all traffic through IPv4 | Only helps on networks with broken IPv6 - most are fine |
@@ -81,7 +81,7 @@ The plugin detects WiFi hardware at startup and uses driver-specific handling wh
 
 The plugin has two parts:
 
-1. **The Decky plugin** runs in the Quick Access Menu. It applies optimizations when you toggle them and shows live status (signal, speed, frequency, channel). It detects when settings have drifted after wake and lets you fix them with one tap.
+1. **The Decky plugin** runs in the Quick Access Menu. It applies optimizations when you toggle them and shows live status (signal, speed, frequency, channel). It reports detected drift after wake; the current repair action has an open audit finding (ST0-011), so it should not be assumed to repair only the existing settings.
 
 2. **A NetworkManager dispatcher script** runs independently of Decky, outside of Steam. Every time your WiFi reconnects (including after sleep), it automatically reapplies the volatile settings (power save, PCIe power states, buffers, CAKE). If you uninstall the plugin, the script removes itself.
 
