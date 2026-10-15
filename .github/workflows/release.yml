@@ -29,7 +29,7 @@ jobs:
     env:
       RELEASE_VERSION: ${{ inputs.version }}
       DECK_TESTED: ${{ inputs.deck_tested }}
-      RELEASE_REF: ${{ github.ref_name }}
+      RELEASE_REF: ${{ github.ref }}
       RELEASE_REPOSITORY: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
     steps:

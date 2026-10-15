@@ -29,7 +29,7 @@ def _stable_version(version: str) -> tuple[int, int, int]:
 
 def validate_release(root: Path, version: str, ref: str, repository: str, deck_tested: bool) -> str:
     _stable_version(version)
-    if ref != "main":
+    if ref != "refs/heads/main":
         raise ValueError("Stable releases can only be dispatched from main")
     if repository != REPOSITORY:
         raise ValueError(f"release repository must be {REPOSITORY}")
@@ -67,16 +67,23 @@ def _gh_api(repository: str, endpoint: str) -> tuple[int, str]:
         raise ValueError(f"release repository must be {REPOSITORY}")
     try:
         result = subprocess.run(["gh", "api", "--include", f"repos/{repository}/{endpoint}"], capture_output=True, text=True, check=False)
-    except OSError as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         raise ValueError("GitHub CLI is unavailable for release history checks") from exc
-    combined = f"{result.stdout}\n{result.stderr}"
-    matches = re.findall(r"HTTP/\S+\s+(\d{3})|HTTP (\d{3})", combined)
-    status = int(next((a or b for a, b in reversed(matches)), "0"))
+    response_lines = result.stdout.splitlines()
+    response_line = response_lines[0] if response_lines else ""
+    match = re.fullmatch(r"HTTP/\d+(?:\.\d+)?\s+(\d{3})(?:\s+.*)?", response_line)
+    if not match:
+        raise ValueError("GitHub API response has no valid HTTP status header")
+    status = int(match.group(1))
     if status == 404:
         return status, ""
     if result.returncode != 0 or status < 200 or status >= 300:
         raise ValueError(f"GitHub API request failed with HTTP {status or 'unknown'}")
-    body = result.stdout.split("\r\n\r\n", 1)[-1].split("\n\n", 1)[-1]
+    _, separator, body = result.stdout.partition("\r\n\r\n")
+    if not separator:
+        _, separator, body = result.stdout.partition("\n\n")
+    if not separator:
+        raise ValueError("GitHub API response has no header/body separator")
     try:
         json.loads(body)
     except json.JSONDecodeError as exc:

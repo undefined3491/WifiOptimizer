@@ -33,13 +33,13 @@ class ReleaseTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_release_validation_accepts_only_attested_canonical_release(self):
-        self.assertEqual(validate_release(self.root, "1.2.3", "main", "undefined3491/WifiOptimizer", True), "v1.2.3")
-        for version, ref, repository, tested in (("01.2.3", "main", "undefined3491/WifiOptimizer", True), ("1.x.3", "main", "undefined3491/WifiOptimizer", True), ("1.2.3-beta.1", "main", "undefined3491/WifiOptimizer", True), ("1.2.4", "main", "undefined3491/WifiOptimizer", True), ("1.2.3", "feature", "undefined3491/WifiOptimizer", True), ("1.2.3", "main", "other/repo", True), ("1.2.3", "main", "undefined3491/WifiOptimizer", False)):
+        self.assertEqual(validate_release(self.root, "1.2.3", "refs/heads/main", "undefined3491/WifiOptimizer", True), "v1.2.3")
+        for version, ref, repository, tested in (("01.2.3", "refs/heads/main", "undefined3491/WifiOptimizer", True), ("1.x.3", "refs/heads/main", "undefined3491/WifiOptimizer", True), ("1.2.3-beta.1", "refs/heads/main", "undefined3491/WifiOptimizer", True), ("1.2.4", "refs/heads/main", "undefined3491/WifiOptimizer", True), ("1.2.3", "refs/heads/feature", "undefined3491/WifiOptimizer", True), ("1.2.3", "refs/tags/main", "undefined3491/WifiOptimizer", True), ("1.2.3", "main", "undefined3491/WifiOptimizer", True), ("1.2.3", "refs/heads/main", "other/repo", True), ("1.2.3", "refs/heads/main", "undefined3491/WifiOptimizer", False)):
             with self.subTest(version=version, ref=ref, repository=repository, tested=tested), self.assertRaises(ValueError):
                 validate_release(self.root, version, ref, repository, tested)
         (self.root / "CHANGELOG.md").write_text("# Changelog\n\n## Unreleased\n\n- Work\n", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "changelog"):
-            validate_release(self.root, "1.2.3", "main", "undefined3491/WifiOptimizer", True)
+            validate_release(self.root, "1.2.3", "refs/heads/main", "undefined3491/WifiOptimizer", True)
 
     def test_release_history_rejects_duplicates_invalid_and_non_increasing(self):
         for latest, tag, release in ((None, True, False), (None, False, True), ("1.2.3", False, False), ("1.2.4", False, False), ("bad", False, False)):
@@ -81,13 +81,15 @@ class ReleaseTests(unittest.TestCase):
                 stdout=f"HTTP/2.0 {status} Response\r\ncontent-type: application/json\r\n\r\n{payload}",
                 stderr="",
             )
-        responses = [result(200, '{"tag_name":"v1.2.2"}'), result(404), result(404)]
+        responses = [result(200, '{"tag_name":"v1.2.2","body":"Fix HTTP 404 handling in updater"}'), result(404), result(404)]
         with patch("scripts.check_delivery.subprocess.run", side_effect=responses):
             self.assertEqual(get_release_history("undefined3491/WifiOptimizer", "1.2.3"), ("1.2.2", False, False))
-        responses = [result(500)]
-        with patch("scripts.check_delivery.subprocess.run", side_effect=responses):
-            with self.assertRaises(ValueError):
-                get_release_history("undefined3491/WifiOptimizer", "1.2.3")
+        with patch("scripts.check_delivery.subprocess.run", side_effect=[result(404), result(404), result(404)]):
+            self.assertEqual(get_release_history("undefined3491/WifiOptimizer", "1.2.3"), (None, False, False))
+        for failure in (result(500), result(403), subprocess.CompletedProcess([], 0, stdout='{"message":"no status"}', stderr=""), subprocess.TimeoutExpired("gh api", 10)):
+            with patch("scripts.check_delivery.subprocess.run", side_effect=[failure]):
+                with self.subTest(failure=failure), self.assertRaises(ValueError):
+                    get_release_history("undefined3491/WifiOptimizer", "1.2.3")
 
 
 def source_map(prefix: str = "../", source_text: str = "export const value = 1;\n") -> dict:
