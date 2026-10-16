@@ -61,7 +61,8 @@ The disconnected early-return (`main.py:844-848`) stays untouched.
 - **D5 — transfer.** Enable on a new active profile overwrites that setting's
   owner. Best-effort clear of the same NM key on the previous owner profile if
   it still exists and differs; a clear failure is logged and reported but does
-  not fail the enable. Never two owners for one setting. Per-setting clear
+  not fail the enable; the enable result carries `transfer_warnings: list[str]`
+  (empty when clean, one entry per failed old-profile clear with key + stderr). Never two owners for one setting. Per-setting clear
   values (restoration-neutral, same values the disablers already write):
   band → `""`; BSSID → `""`; DNS → `ipv4.dns ""` + `ipv4.ignore-auto-dns "no"`;
   IPv6 → `auto`. Transfer never calls `_hard_reconnect` on the old UUID; only
@@ -69,7 +70,8 @@ The disconnected early-return (`main.py:844-848`) stays untouched.
 - **D6 — legacy unknown-owner.** `enabled=True` + owner empty: status keeps
   `drift.<setting> = True` (bool, unchanged type) and additionally reports an
   additive `status["unknown_owners"]: list[str]` naming the settings whose owner
-  is unknown; zero mutations. Split setter behavior per setting: enable with
+  is unknown, using exactly these literals: `bssid_lock`, `band_preference`,
+  `dns`, `ipv6`; zero mutations. Split setter behavior per setting: enable with
   unknown owner returns `{success: False, error: "unknown_owner", message:
   "Setting is enabled but its network profile is unknown. Re-apply on the desired
   network."}`, intent preserved, zero `nmcli` calls; disable with unknown owner
