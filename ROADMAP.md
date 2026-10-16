@@ -1,12 +1,12 @@
 # Roadmap
 
-Updated: 2026-10-15. Statuses describe work completed in this fork, not upstream feature claims. No delivery dates are promised.
+Updated: 2026-10-16. Statuses describe work completed in this fork, not upstream feature claims. No delivery dates are promised.
 
 The fork's next product goal is to make a loss of connectivity visible during gameplay without opening the Decky Quick Access Menu. Establish a reviewed and tested foundation before adding that monitoring.
 
 ## Stage 0 — Audit and establish a baseline
 
-**Status: In progress — static review completed; 14 Important and 9 Minor findings remain open, with fixes and device validation pending.** See the [consolidated report](docs/audits/2026-10-15-stage-0-findings.md). Static completion does not close Stage 0.
+**Status: In progress — static review completed; ST0-010's entry reservation race corrected with isolated regression tests and independent review; 13 Important and 9 Minor findings remain open.** See the [consolidated report](docs/audits/2026-10-15-stage-0-findings.md) and [correction plan](docs/superpowers/plans/2026-10-16-stage-0-backend-reservation.md). Candidate-specific device validation is pending. Static completion does not close Stage 0.
 
 - Review the inherited Python backend, shell installer/dispatcher and React frontend, including privileged writes, error handling, reconnects, update/install recovery, reset and uninstall.
 - Reassess every optimization against current SteamOS, drivers and measured behavior. Record a decision to retain, constrain, change or remove it, with evidence and tradeoffs.
