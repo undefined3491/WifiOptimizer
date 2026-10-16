@@ -1,6 +1,8 @@
-# WiFi Optimizer v0.11.6
+# WiFi Optimizer TMS v0.11.6
 
-This fork is maintained at [undefined3491/WifiOptimizer](https://github.com/undefined3491/WifiOptimizer), based on the original [Arcada Labs project](https://github.com/ArcadaLabs-Jason/WifiOptimizer).
+Public plugin name: **WiFi Optimizer TMS**; package: **`wifi-optimizer-tms`**. The canonical GitHub repository is `undefined3491/wifi-optimizer-tms`. The technical installation/settings directory remains `WiFi Optimizer`. See the [branding stages and compatibility identifiers](docs/branding.md).
+
+This fork is maintained at [undefined3491/wifi-optimizer-tms](https://github.com/undefined3491/wifi-optimizer-tms), based on the original [Arcada Labs project](https://github.com/ArcadaLabs-Jason/WifiOptimizer).
 
 > **Heads up:** This plugin modifies WiFi and network settings. Some optimizations (band preference, custom DNS, WiFi backend switch) can temporarily prevent WiFi from connecting. If this happens, a reboot usually fixes it. You can also try forgetting and rejoining your WiFi network from Steam settings.
 
@@ -12,19 +14,19 @@ A [Decky Loader](https://decky.xyz/) plugin exposing WiFi and network settings i
 
 WiFi power management, access-point roaming and network queue behavior can affect streaming. Settings can change across reconnects, sleep/wake and OS updates, but the behavior and useful workarounds depend on the OS, driver and network. Current SteamOS releases include relevant WiFi fixes, so this fork is reassessing the inherited optimizations against a measured baseline.
 
-WiFi Optimizer exposes these settings from Game Mode and can reapply enabled options after reconnects. Effects and tradeoffs need validation for the device and workload.
+WiFi Optimizer TMS exposes these settings from Game Mode and can reapply enabled options after reconnects. Effects and tradeoffs need validation for the device and workload.
 
 ## Install / Update
 
 [Decky Loader](https://decky.xyz/) must be installed first. Then open Desktop Mode > Konsole and run:
 
 ```bash
-curl -sL https://github.com/undefined3491/WifiOptimizer/raw/main/install.sh -o /tmp/wifi-opt-install.sh && sudo bash /tmp/wifi-opt-install.sh
+curl -sL https://github.com/undefined3491/wifi-optimizer-tms/raw/main/install.sh -o /tmp/wifi-opt-install.sh && sudo bash /tmp/wifi-opt-install.sh
 ```
 
 This requires a user password - set one with `passwd` in Konsole if you haven't already.
 
-Switch back to Game Mode. Open the Quick Access Menu (**...** button) > Decky > WiFi Optimizer.
+Switch back to Game Mode. Open the Quick Access Menu (**...** button) > Decky > WiFi Optimizer TMS.
 
 **Updating:** The plugin checks for updates automatically when you open it. If an update is available, an update button appears at the top of the panel - tap it and the plugin updates and restarts itself. You can also update manually by running the install command above again.
 
@@ -34,7 +36,7 @@ Installation and updates use this fork. The installer falls back to its `main` b
 
 ## Getting started
 
-1. Open WiFi Optimizer from the Decky sidebar
+1. Open WiFi Optimizer TMS from the Decky sidebar
 2. The existing **Optimize Safe** preset applies the options below. Its name is inherited; universal benefit and battery cost are under audit. Validate individual options and recovery before testing the combined preset:
    - Disables WiFi power save and PCIe power states
    - Locks your BSSID, which also constrains access-point roaming
@@ -91,7 +93,7 @@ The visible panel polls status, and a plugin-level game-start listener reapplies
 
 **Before uninstalling:** tap **Reset Settings** in the plugin's Actions section. This reverts the runtime optimizations (power save, buffer tuning, PCIe ASPM, CAKE) and deletes the plugin's own config files. Per-connection NetworkManager profile changes (BSSID lock, band preference, custom DNS, IPv6) stay on your saved WiFi network - to remove those, forget and rejoin the network from Steam's WiFi settings. The WiFi backend choice (iwd vs wpa_supplicant) is system-wide. Reset and uninstall remove the plugin's generic backend override used on systems such as Bazzite/CachyOS; the SteamOS helper's backend configuration and systemd service state are left in place.
 
-Then uninstall from Decky's plugin manager (Decky settings > WiFi Optimizer > Uninstall), or manually:
+Then uninstall from Decky's plugin manager (Decky settings > WiFi Optimizer TMS > Uninstall), or manually:
 
 ```bash
 rm -rf ~/homebrew/plugins/WiFi\ Optimizer
@@ -107,8 +109,8 @@ sudo systemctl restart plugin_loader
 Requires Node.js and pnpm v9.
 
 ```bash
-git clone https://github.com/undefined3491/WifiOptimizer.git
-cd WifiOptimizer
+git clone https://github.com/undefined3491/wifi-optimizer-tms.git
+cd wifi-optimizer-tms
 pnpm i
 pnpm run build
 ```

@@ -33,13 +33,13 @@ class ReleaseTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_release_validation_accepts_only_attested_canonical_release(self):
-        self.assertEqual(validate_release(self.root, "1.2.3", "refs/heads/main", "undefined3491/WifiOptimizer", True), "v1.2.3")
-        for version, ref, repository, tested in (("01.2.3", "refs/heads/main", "undefined3491/WifiOptimizer", True), ("1.x.3", "refs/heads/main", "undefined3491/WifiOptimizer", True), ("1.2.3-beta.1", "refs/heads/main", "undefined3491/WifiOptimizer", True), ("1.2.4", "refs/heads/main", "undefined3491/WifiOptimizer", True), ("1.2.3", "refs/heads/feature", "undefined3491/WifiOptimizer", True), ("1.2.3", "refs/tags/main", "undefined3491/WifiOptimizer", True), ("1.2.3", "main", "undefined3491/WifiOptimizer", True), ("1.2.3", "refs/heads/main", "other/repo", True), ("1.2.3", "refs/heads/main", "undefined3491/WifiOptimizer", False)):
+        self.assertEqual(validate_release(self.root, "1.2.3", "refs/heads/main", "undefined3491/wifi-optimizer-tms", True), "v1.2.3")
+        for version, ref, repository, tested in (("01.2.3", "refs/heads/main", "undefined3491/wifi-optimizer-tms", True), ("1.x.3", "refs/heads/main", "undefined3491/wifi-optimizer-tms", True), ("1.2.3-beta.1", "refs/heads/main", "undefined3491/wifi-optimizer-tms", True), ("1.2.4", "refs/heads/main", "undefined3491/wifi-optimizer-tms", True), ("1.2.3", "refs/heads/feature", "undefined3491/wifi-optimizer-tms", True), ("1.2.3", "refs/tags/main", "undefined3491/wifi-optimizer-tms", True), ("1.2.3", "main", "undefined3491/wifi-optimizer-tms", True), ("1.2.3", "refs/heads/main", "other/repo", True), ("1.2.3", "refs/heads/main", "undefined3491/WifiOptimizer", True), ("1.2.3", "refs/heads/main", "undefined3491/wifi-optimizer-tms", False)):
             with self.subTest(version=version, ref=ref, repository=repository, tested=tested), self.assertRaises(ValueError):
                 validate_release(self.root, version, ref, repository, tested)
         (self.root / "CHANGELOG.md").write_text("# Changelog\n\n## Unreleased\n\n- Work\n", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "changelog"):
-            validate_release(self.root, "1.2.3", "refs/heads/main", "undefined3491/WifiOptimizer", True)
+            validate_release(self.root, "1.2.3", "refs/heads/main", "undefined3491/wifi-optimizer-tms", True)
 
     def test_release_history_rejects_duplicates_invalid_and_non_increasing(self):
         for latest, tag, release in ((None, True, False), (None, False, True), ("1.2.3", False, False), ("1.2.4", False, False), ("bad", False, False)):
@@ -66,9 +66,13 @@ class ReleaseTests(unittest.TestCase):
                     info.size = len(data)
                     import io
                     tar.addfile(info, io.BytesIO(data))
-        prefix = "WifiOptimizer-1.2.3/"
+        prefix = "wifi-optimizer-tms-1.2.3/"
         write([prefix + item for item in required])
         verify_archive(archive, "1.2.3")
+        for wrong_root in ("WifiOptimizer-1.2.3/", "wifi-optimizer-tms-main/", "wifi-optimizer-tms-beta/", "wifi-optimizer-tms-" + "a" * 40 + "/"):
+            write([wrong_root + item for item in required])
+            with self.subTest(root=wrong_root), self.assertRaisesRegex(ValueError, "exact release root"):
+                verify_archive(archive, "1.2.3")
         for entries in ([prefix + item for item in required[:-1]], [prefix + item for item in required] + [prefix + required[0]], [prefix + "../escape"] + [prefix + item for item in required]):
             write(entries)
             with self.subTest(entries=entries), self.assertRaises(ValueError):
@@ -83,13 +87,13 @@ class ReleaseTests(unittest.TestCase):
             )
         responses = [result(200, '{"tag_name":"v1.2.2","body":"Fix HTTP 404 handling in updater"}'), result(404), result(404)]
         with patch("scripts.check_delivery.subprocess.run", side_effect=responses):
-            self.assertEqual(get_release_history("undefined3491/WifiOptimizer", "1.2.3"), ("1.2.2", False, False))
+            self.assertEqual(get_release_history("undefined3491/wifi-optimizer-tms", "1.2.3"), ("1.2.2", False, False))
         with patch("scripts.check_delivery.subprocess.run", side_effect=[result(404), result(404), result(404)]):
-            self.assertEqual(get_release_history("undefined3491/WifiOptimizer", "1.2.3"), (None, False, False))
+            self.assertEqual(get_release_history("undefined3491/wifi-optimizer-tms", "1.2.3"), (None, False, False))
         for failure in (result(500), result(403), subprocess.CompletedProcess([], 0, stdout='{"message":"no status"}', stderr=""), subprocess.TimeoutExpired("gh api", 10)):
             with patch("scripts.check_delivery.subprocess.run", side_effect=[failure]):
                 with self.subTest(failure=failure), self.assertRaises(ValueError):
-                    get_release_history("undefined3491/WifiOptimizer", "1.2.3")
+                    get_release_history("undefined3491/wifi-optimizer-tms", "1.2.3")
 
 
 def source_map(prefix: str = "../", source_text: str = "export const value = 1;\n") -> dict:
@@ -107,7 +111,7 @@ def source_map(prefix: str = "../", source_text: str = "export const value = 1;\
 class SourceMapTests(unittest.TestCase):
     def test_normalizes_allowed_uri_prefix_and_crlf_only(self):
         relative = source_map()
-        decky = source_map("decky://decky/plugin/WiFi%20Optimizer/")
+        decky = source_map("decky://decky/plugin/WiFi%20Optimizer%20TMS/")
         decky["sourcesContent"] = ["export const value = 1;\r\n", "module.exports = {};\r\n"]
         self.assertEqual(normalize_source_map(relative), normalize_source_map(decky))
 
@@ -121,7 +125,7 @@ class SourceMapTests(unittest.TestCase):
         self.assertNotEqual(original, normalize_source_map(altered))
 
     def test_rejects_unsupported_or_ambiguous_source_paths(self):
-        for path in ("https://example.test/src/index.tsx", "../src/../secret.ts"):
+        for path in ("https://example.test/src/index.tsx", "../src/../secret.ts", "decky://decky/plugin/WiFi%20Optimizer/src/index.tsx"):
             data = source_map()
             data["sources"][0] = path
             with self.subTest(path=path), self.assertRaisesRegex(ValueError, "source"):
@@ -159,7 +163,7 @@ class DistTests(unittest.TestCase):
     def test_snapshot_and_verify_accept_semantically_equivalent_map(self):
         snapshot = self.root / "snapshot.json"
         snapshot_dist(self.root, snapshot)
-        equivalent = source_map("decky://decky/plugin/WiFi%20Optimizer/")
+        equivalent = source_map("decky://decky/plugin/WiFi%20Optimizer%20TMS/")
         equivalent["sourcesContent"] = ["export const value = 1;\r\n", "module.exports = {};\r\n"]
         (self.root / "dist/index.js.map").write_text(json.dumps(equivalent), encoding="utf-8")
         (self.root / "dist/index.js").write_bytes(b"const value = 1;\r\n")

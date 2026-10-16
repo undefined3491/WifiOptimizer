@@ -1,10 +1,12 @@
 #!/bin/bash
-# WiFi Optimizer - Decky Plugin Installer
-# Usage: curl -sL https://github.com/undefined3491/WifiOptimizer/raw/main/install.sh -o /tmp/wifi-opt-install.sh && sudo bash /tmp/wifi-opt-install.sh
+# WiFi Optimizer TMS - Decky Plugin Installer
+# Usage: curl -sL https://github.com/undefined3491/wifi-optimizer-tms/raw/main/install.sh -o /tmp/wifi-opt-install.sh && sudo bash /tmp/wifi-opt-install.sh
 
 set -e
 
+# Compatibility directory key; the public name comes from plugin.json.
 PLUGIN_NAME="WiFi Optimizer"
+PLUGIN_DISPLAY_NAME="WiFi Optimizer TMS"
 
 # Check for root (needed to write to plugin dir and restart service)
 if [ "$(id -u)" -ne 0 ]; then
@@ -32,16 +34,16 @@ fi
 
 # Fetch latest release tag from GitHub
 echo "Checking for latest release..."
-LATEST_TAG=$(curl -sL "https://api.github.com/repos/undefined3491/WifiOptimizer/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+LATEST_TAG=$(curl -sL "https://api.github.com/repos/undefined3491/wifi-optimizer-tms/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
 
 if [ -z "$LATEST_TAG" ]; then
     echo "Warning: Couldn't fetch latest release, falling back to main branch"
-    REPO_URL="https://github.com/undefined3491/WifiOptimizer/archive/refs/heads/main.tar.gz"
-    DIR_NAME="WifiOptimizer-main"
+    REPO_URL="https://github.com/undefined3491/wifi-optimizer-tms/archive/refs/heads/main.tar.gz"
+    DIR_NAME="wifi-optimizer-tms-main"
 else
     echo "Latest release: $LATEST_TAG"
-    REPO_URL="https://github.com/undefined3491/WifiOptimizer/archive/refs/tags/${LATEST_TAG}.tar.gz"
-    DIR_NAME="WifiOptimizer-${LATEST_TAG#v}"
+    REPO_URL="https://github.com/undefined3491/wifi-optimizer-tms/archive/refs/tags/${LATEST_TAG}.tar.gz"
+    DIR_NAME="wifi-optimizer-tms-${LATEST_TAG#v}"
 fi
 
 TMP_DIR=$(mktemp -d)
@@ -51,7 +53,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Installing $PLUGIN_NAME..."
+echo "Installing $PLUGIN_DISPLAY_NAME..."
 
 # Download and extract
 echo "Downloading..."
@@ -90,7 +92,7 @@ systemctl restart plugin_loader 2>/dev/null || true
 
 echo ""
 if [ "$UPGRADING" = true ]; then
-    echo "WiFi Optimizer updated! Your settings have been preserved."
+    echo "$PLUGIN_DISPLAY_NAME updated! Your settings have been preserved."
 else
-    echo "WiFi Optimizer installed! Open the Quick Access Menu to configure."
+    echo "$PLUGIN_DISPLAY_NAME installed! Open the Quick Access Menu to configure."
 fi

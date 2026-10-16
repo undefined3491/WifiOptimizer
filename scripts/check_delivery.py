@@ -13,8 +13,8 @@ import tarfile
 from pathlib import Path
 from typing import Any
 
-DECKY_PREFIX = "decky://decky/plugin/WiFi%20Optimizer/"
-REPOSITORY = "undefined3491/WifiOptimizer"
+DECKY_PREFIX = "decky://decky/plugin/WiFi%20Optimizer%20TMS/"
+REPOSITORY = "undefined3491/wifi-optimizer-tms"
 SHIPPED_FILES = (
     "plugin.json", "package.json", "main.py", "decky.pyi", "dist/index.js",
     "dist/index.js.map", "defaults/dispatcher.sh.tmpl",
@@ -110,7 +110,7 @@ def get_release_history(repository: str, version: str) -> tuple[str | None, bool
 
 def verify_archive(archive: Path, version: str) -> None:
     _stable_version(version)
-    expected_root = f"WifiOptimizer-{version}"
+    expected_root = f"wifi-optimizer-tms-{version}"
     found: set[str] = set()
     seen: set[str] = set()
     try:
@@ -329,7 +329,7 @@ def check_python_and_shell(root: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Validate committed WiFi Optimizer delivery artifacts")
+    parser = argparse.ArgumentParser(description="Validate committed WiFi Optimizer TMS delivery artifacts")
     sub = parser.add_subparsers(dest="command", required=True)
     snapshot_parser = sub.add_parser("snapshot")
     snapshot_parser.add_argument("--output", type=Path, required=True)

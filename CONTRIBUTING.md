@@ -6,6 +6,10 @@ Use a short-lived `codex/<change>` branch, as required by the owner's latest ins
 
 Merging does not publish a release. Documentation and CI-only changes do not need a version bump. Do not push directly to `main` or publish Stable automatically on merge.
 
+## Branding and deployment paths
+
+The public name is `WiFi Optimizer TMS`, and `package.json` uses `wifi-optimizer-tms`. The canonical GitHub repository is `undefined3491/wifi-optimizer-tms`. Keep `.vscode/defsettings.json` / local settings `pluginname` at `WiFi Optimizer`: it selects the existing install/settings directory, not the visible label. Follow [the branding stages](docs/branding.md) before changing repository URLs, archive roots or device paths. A source rename does not publish or deploy the plugin.
+
 ## Local checks and generated files
 
 Device development uses the [documented Decky debugging workflow](docs/testing/decky-development-workflow.md): CEF for frontend inspection, optional standalone React DevTools, and Konsole or optional SSH for Linux/backend work. The Stage 0 inventory needs no remote-debugging or SSH setup. Native ZIP installation must account for this plugin's unresolved uninstall/restoration findings.

@@ -1,4 +1,4 @@
-# AGENTS.md — WiFi Optimizer (Decky Loader plugin)
+# AGENTS.md — WiFi Optimizer TMS (Decky Loader plugin)
 
 Decky plugin (Steam Deck / handhelds): React TS frontend + Python backend (runs as **root** in `plugin_loader`) + NetworkManager dispatcher script for wake/reconnect persistence.
 
@@ -23,10 +23,16 @@ Decky plugin (Steam Deck / handhelds): React TS frontend + Python backend (runs 
 - Stage 0 preparation: the owner-authorized [standalone inventory](docs/testing/collect-inventory.md) observes the existing device without plugin IPC; Windows checks use fixtures only. The [installation/update recovery design](docs/superpowers/specs/2026-10-15-delivery-recovery-design.md) is proposed for review, with runtime implementation pending. Do not count the collector or design as fixes for ST0-001/002/003/018 or as device validation.
 - Use the [source-checked Decky development workflow](docs/testing/decky-development-workflow.md) for device work. CEF and React DevTools serve frontend inspection; SSH is optional transport for Linux/backend/deployment work, not a prerequisite for local inventory. Evaluate native ZIP lifecycle before implementing a specialized updater; Decky 3.2.10 replacement can invoke this plugin's unsafe current uninstall path. Keep the existing owner-approved delivery/release policy unless the owner explicitly changes it.
 
+## Branding stages and compatibility
+
+- Public plugin/manifest/frontend name: `WiFi Optimizer TMS`; package name: `wifi-optimizer-tms`, selected by the owner. Follow [the staged branding record](docs/branding.md); do not infer a completed GitHub rename or device migration from source changes.
+- Keep the existing technical directory key `WiFi Optimizer` in the installer and VS Code deployment settings; Decky settings/data/log paths derive from that directory. Keep `99-wifi-optimizer*`, temporary paths and logger identifiers compatible. Display names and the source-map URI use the TMS name. Do not move/delete settings, reset or uninstall to apply branding.
+- Repository cutover uses `undefined3491/wifi-optimizer-tms` consistently in installer/updater URLs and the release repository guard; source archives use `wifi-optimizer-tms-<ref>` roots. The former `undefined3491/WifiOptimizer` name is historical; do not reuse it or add it as an updater fallback. Keep existing technical paths, upstream credits, version continuity and all Stage 0 gates.
+- Display/package branding was squash merged through PR #4 as `94cc9fec6901f38cbba68310f6567e4e2994926d`. Repository cutover was squash merged through PR #5 as `d4ade2d848c7cc9db5b78afc436e06ab76709199`; unchanged GitHub node ID, canonical archives/raw installer and main CI were verified on 2026-10-16. Device migration remains pending. See [the identity record](docs/superpowers/specs/2026-10-15-tms-identity-design.md).
+
 ## Repository and updates
 
-- Owner-selected public identity (2026-10-15): plugin `WiFi Optimizer TMS`, future repository slug and package name `wifi-optimizer-tms`. This decision does not mean the live repository or product has been renamed. The [identity and cutover design](docs/superpowers/specs/2026-10-15-tms-identity-design.md) is proposed for review; retaining the legacy installation directory is a proposal, not yet an approved compatibility policy. Coordinate product URLs, archive roots and delivery checks before the external rename; retain Stage 0 release gates.
-- This fork's repository is `https://github.com/undefined3491/WifiOptimizer`. Installer downloads, in-app update checks/downloads, clone/install instructions, and bug-report links must point here. Keep upstream author credits and the BSD-3-Clause license intact.
+- This fork's canonical repository is `https://github.com/undefined3491/wifi-optimizer-tms`. Installer downloads, in-app update checks/downloads, clone/install instructions, and bug-report links must point here. Keep upstream author credits and the BSD-3-Clause license intact.
 - Stable updates use this fork's latest published GitHub release, tagged `v<version>` with a matching `package.json` version. Beta updates read `package.json` and download the archive from this fork's `beta` branch. Both require the corresponding release/branch to exist; never fall back to the upstream repository.
 - `install.sh` falls back to this fork's `main` branch if it cannot obtain a release tag. In-app update checks have no such fallback. Rebuild and include the tracked `dist/index.js` and `dist/index.js.map` before publishing a release or updating an installable branch.
 

@@ -1,4 +1,4 @@
-// Design tokens for the WiFi Optimizer panel. Keep this in sync with the
+// Design tokens for the WiFi Optimizer TMS panel. Keep this in sync with the
 // palette used in the README mockup and the four semantic banner colors
 // (success/warning/error/info) that Decky's Quick Access Menu supports well
 // against its dark background.

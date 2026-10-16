@@ -2,13 +2,13 @@
 
 Date: 2026-10-15. Product baseline: `7e3d45f60504aa53b17155136535006b7bf1e634`; runtime findings refer to audited `e957c5b`.
 
-**Status: Proposed for owner review.** Preparation and a separate read-only inventory tool are authorized. The deployment engine, runtime changes, GitHub rename, device installation and publication described here are not implemented. This specification does not close any audit finding.
+**Status: Proposed for owner review.** Preparation and a separate read-only inventory tool are authorized. The deployment engine and its runtime changes, corrected-candidate device installation and publication described here are not implemented. Public branding and the GitHub/URL/archive cutover completed separately through PR #4/#5 on 2026-10-16. This specification does not close any audit finding.
 
 ## Outcome and scope
 
 Correct ST0-001/002/003/018: downloading or copying a bad update must not destroy the existing installation, competing updates must not overlap, and service failure must not be presented as successful installation. Include the narrowly necessary operation reservation from ST0-010 and update-specific error/status handling. Do not claim full backend-switch, settings-restoration or networking correctness from this package.
 
-The owner selected `WiFi Optimizer TMS` and repository/package `wifi-optimizer-tms`. Follow the [identity design](2026-10-15-tms-identity-design.md): retain the installation directory `WiFi Optimizer`, settings/data/log paths and existing dispatcher/system-config filenames. Coordinate public identity, URLs, packaging and the later GitHub cutover. Keep version `0.11.6` until release preparation; all remaining first-Stable audit/device gates still apply.
+The owner selected `WiFi Optimizer TMS` and repository/package `wifi-optimizer-tms`. Follow the [identity design](2026-10-15-tms-identity-design.md): retain the installation directory `WiFi Optimizer`, settings/data/log paths and existing dispatcher/system-config filenames. Public identity/URL/archive cutover is implemented through PR #4/#5; device migration and this proposed recovery implementation remain separate pending work. Keep version `0.11.6` until release preparation; all remaining first-Stable audit/device gates still apply.
 
 ## Selected architecture
 
@@ -47,7 +47,7 @@ Resolve each submitted candidate once to a full commit SHA. Persist repository i
 - Stable: latest published Stable release, exact valid `vX.Y.Z` tag resolved to a commit, matching package version `X.Y.Z`. Missing release is an explicit no-release/error result; no in-app fallback to main.
 - Beta: resolve the existing `beta` branch to a commit, then read metadata and download from that same commit. Preserve version-based update availability; same-version republishing is outside this change.
 - Manual installer: preserve the disclosed latest-release lookup fallback to main, clearly labeled unreleased fallback, and pin main to a commit. Once a release/candidate is selected, archive or staging failure cannot silently select a different source.
-- Do not substitute upstream. Before cutover use the current fork identity; the coordinated branding PR changes the exact canonical identity to `undefined3491/wifi-optimizer-tms`.
+- Do not substitute upstream. Canonical identity is `undefined3491/wifi-optimizer-tms`, verified in the completed repository cutover; do not use the former repository slug as a fallback.
 
 Download an archive of the resolved commit, not a moving branch/tag. Runtime SHA archives have a root based on the repository slug and commit SHA; release-validator fixtures for the existing tag/version source archive have a different root contract. Validate each format explicitly rather than globally replacing one assumed root string. HTTP errors, non-HTTPS redirects, connection/total deadlines, archive/download size and member/expanded-size limits are enforced before commit. Use argument arrays and a clean environment; metadata is never interpolated into shell code.
 
@@ -102,7 +102,7 @@ Return an accepted job identifier and candidate identifier with a typed reason f
 
 1. Pure identity/archive/journal validation fixtures, then isolated Linux filesystem adapter and injected copy/flush/exchange failures.
 2. Independent service worker and durable reservation/reconciliation, then installer bootstrap; failure must preserve prior files and truthful status.
-3. Backend gate/early lifecycle acknowledgement and update IPC/UI integration, then branding/packaging and coordinated GitHub cutover under the identity design.
+3. Backend gate/early lifecycle acknowledgement and update IPC/UI integration, then corrected-candidate packaging and device migration under the identity record. Public branding and GitHub cutover already shipped through PR #4/#5 without implementing this engine.
 4. Reviewed candidate-specific LCD / Stable inventory, recovery preparation, installation/update and reconnect/sleep-wake evidence. Publish separately only after remaining Stage 0 gates close.
 
 Required tests cover wrong/missing payload, HTTP failures, ENOSPC, traversal/links/FIFOs, unsafe ancestors, permission errors, unsupported exchange without live mutation, repeated/same-candidate installation, conflicting copies, competing installer/update/switch calls, reservation handoff/cancellation, and termination before/after each journal/exchange/service boundary. During real Linux exchanges, repeatedly check that the live directory remains present as the dispatcher would. Crash reconciliation must handle identical payloads using directory identities and preserve ambiguity when necessary.

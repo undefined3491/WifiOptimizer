@@ -55,7 +55,7 @@ jobs:
         run: |
           set -euo pipefail
           archive="$RUNNER_TEMP/wifi-optimizer-release.tar"
-          git archive --format=tar --prefix="WifiOptimizer-${RELEASE_VERSION}/" "$GITHUB_SHA" > "$archive"
+          git archive --format=tar --prefix="wifi-optimizer-tms-${RELEASE_VERSION}/" "$GITHUB_SHA" > "$archive"
           python scripts/check_delivery.py verify-archive --archive "$archive" --version "$RELEASE_VERSION"
 
   publish:

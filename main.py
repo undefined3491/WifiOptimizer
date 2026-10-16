@@ -1,4 +1,4 @@
-"""WiFi Optimizer backend for Decky Loader.
+"""WiFi Optimizer TMS backend for Decky Loader.
 
 Runs as root inside the plugin_loader process. All public async methods on
 the Plugin class are callable from the React frontend via Decky's IPC. State
@@ -402,7 +402,7 @@ class Plugin:
             try:
                 os.makedirs(os.path.dirname(MODPROBE_CONF_PATH), exist_ok=True)
                 with open(MODPROBE_CONF_PATH, "w") as f:
-                    f.write("# WiFi Optimizer - driver power save fixes\n")
+                    f.write("# WiFi Optimizer TMS - driver power save fixes\n")
                     for opt in options:
                         f.write(opt + "\n")
             except Exception as e:
@@ -518,7 +518,7 @@ class Plugin:
 
     async def _main(self):
         try:
-            decky.logger.info("WiFi Optimizer starting")
+            decky.logger.info("WiFi Optimizer TMS starting")
             self._rotate_logs()
             self._ensure_backend_switch_state()
             info = await self.get_device_info()
@@ -580,16 +580,16 @@ class Plugin:
                         )
 
             decky.logger.info(
-                f"WiFi Optimizer ready: device={info.get('device_label')}, "
+                f"WiFi Optimizer TMS ready: device={info.get('device_label')}, "
                 f"family={info.get('device_family')}, driver={info.get('driver')}, "
                 f"chip={info.get('chip_label')}, distro={distro['id']}"
             )
         except Exception as e:
-            decky.logger.error(f"WiFi Optimizer _main error: {e}")
+            decky.logger.error(f"WiFi Optimizer TMS _main error: {e}")
 
     async def _unload(self):
         try:
-            decky.logger.info("WiFi Optimizer unloading")
+            decky.logger.info("WiFi Optimizer TMS unloading")
             task = getattr(self, "_backend_switch_task", None)
             if task and not task.done():
                 task.cancel()
@@ -598,7 +598,7 @@ class Plugin:
 
     async def _uninstall(self):
         try:
-            decky.logger.info("WiFi Optimizer uninstalling")
+            decky.logger.info("WiFi Optimizer TMS uninstalling")
             self._remove_dispatcher()
             self._apply_driver_fixes(False)
             self._apply_pcie_aspm_fix(False)
@@ -1672,7 +1672,7 @@ class Plugin:
                     [
                         "/usr/bin/curl", "-sL", "--connect-timeout", "3", "--max-time", "10",
                         "-H", "Accept: application/vnd.github.raw+json",
-                        "https://api.github.com/repos/undefined3491/WifiOptimizer/contents/package.json?ref=beta",
+                        "https://api.github.com/repos/undefined3491/wifi-optimizer-tms/contents/package.json?ref=beta",
                     ],
                     15,
                     True,
@@ -1683,7 +1683,7 @@ class Plugin:
                     [
                         "/usr/bin/curl", "-sL", "--connect-timeout", "3", "--max-time", "10",
                         "-H", "Accept: application/vnd.github.v3+json",
-                        "https://api.github.com/repos/undefined3491/WifiOptimizer/releases/latest",
+                        "https://api.github.com/repos/undefined3491/wifi-optimizer-tms/releases/latest",
                     ],
                     15,
                     True,
@@ -1761,13 +1761,13 @@ class Plugin:
             plugin_dir = decky.DECKY_PLUGIN_DIR
 
             if channel == "beta":
-                download_url = "https://github.com/undefined3491/WifiOptimizer/archive/refs/heads/beta.tar.gz"
-                src_dir = "WifiOptimizer-beta"
+                download_url = "https://github.com/undefined3491/wifi-optimizer-tms/archive/refs/heads/beta.tar.gz"
+                src_dir = "wifi-optimizer-tms-beta"
                 label = f"beta v{latest}"
             else:
                 tag = f"v{latest}"
-                download_url = f"https://github.com/undefined3491/WifiOptimizer/archive/refs/tags/{tag}.tar.gz"
-                src_dir = f"WifiOptimizer-{latest}"
+                download_url = f"https://github.com/undefined3491/wifi-optimizer-tms/archive/refs/tags/{tag}.tar.gz"
+                src_dir = f"wifi-optimizer-tms-{latest}"
                 label = f"v{latest}"
 
             script = f"""#!/bin/bash
