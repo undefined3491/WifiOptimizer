@@ -892,7 +892,10 @@ class RestorationTests(unittest.IsolatedAsyncioTestCase):
         )
 
         result = await f.plugin.reset_settings()
-        self.assertTrue(result["success"])
+        # Fallback reset (no snapshot slots): errors non-empty, so success
+        # is False — defaults were applied but the true priors are unknown.
+        self.assertFalse(result["success"])
+        self.assertTrue(result.get("errors"))
         self.assertIn("errors", result)
 
         iw_sets = [
@@ -928,6 +931,34 @@ class RestorationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(fresh["buffer_tuning_enabled"])
         self.assertNotEqual(fresh["last_applied"], 0)
         self.assertIsNotNone(f.read_file(f.GENERIC_BACKEND_CONF))
+
+    async def test_reset_clean_success_true(self):
+        # Clean reset (every slot captured by prior enables): no errors,
+        # success stays True.
+        f = self.fixture()
+        self.require_snapshot(f)
+        f.seed_settings(driver="rtw88")
+        self.assertTrue((await f.plugin.set_power_save(True))["success"])
+        self.assertTrue((await f.plugin.set_auto_fix(True))["success"])
+        self.assertTrue((await f.plugin.set_buffer_tuning(True))["success"])
+        self.assertTrue((await f.plugin.set_cake(True))["success"])
+        self.assertTrue((await f.plugin.set_bssid_lock(True))["success"])
+        self.assertTrue(
+            (await f.plugin.set_band_preference(True, "a"))["success"]
+        )
+        self.assertTrue(
+            (await f.plugin.set_dns(True, "cloudflare"))["success"]
+        )
+        self.assertTrue((await f.plugin.set_ipv6(True))["success"])
+
+        result = await f.plugin.reset_settings()
+        self.assertEqual(result.get("errors"), [])
+        self.assertTrue(result["success"])
+
+        fresh = f.get_settings()
+        self.assertTrue(fresh["power_save_disabled"])
+        self.assertTrue(fresh["auto_fix_on_wake"])
+        self.assertFalse(fresh["buffer_tuning_enabled"])
 
     async def test_uninstall_restores_iw_and_removes(self):
         f = self.fixture()

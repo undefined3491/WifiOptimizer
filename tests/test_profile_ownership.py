@@ -35,6 +35,7 @@ ASSIGN_NAMES = {
     "DNS_PROVIDERS",
     "DISPATCHER_PATH",
     "ENFORCED_FILE",
+    "SYSCTL_PARAMS",
 }
 
 SOURCE = Path(__file__).resolve().parents[1] / "main.py"

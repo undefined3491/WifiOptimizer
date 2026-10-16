@@ -730,7 +730,7 @@ class TruthfulResultsTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(g.get_settings()["cake_enabled"])
 
     async def test_dispatcher_fail_blocks_intent(self):
-        f = self.fixture()
+        f = self.fixture(auto_fix_on_wake=False)
         f.fail_paths = {f.DISPATCHER_PATH}
         writes_before = f.settings_writes()
         result = await f.plugin.set_auto_fix(True)
@@ -745,7 +745,7 @@ class TruthfulResultsTests(unittest.IsolatedAsyncioTestCase):
     async def test_sysfs_pcie_modprobe_fail_blocks_intent(self):
         sysfs_path = "/sys/module/rtw88_core/parameters/disable_lps_deep"
         # sysfs write failure blocks power-save intent.
-        f = self.fixture(driver="rtw88")
+        f = self.fixture(power_save_disabled=False, driver="rtw88")
         f.fail_paths = {sysfs_path}
         writes_before = f.settings_writes()
         result = await f.plugin.set_power_save(True)
@@ -756,7 +756,7 @@ class TruthfulResultsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(f.settings_writes(), writes_before)
 
         # modprobe conf write failure reports its own code.
-        g = self.fixture(driver="rtw88")
+        g = self.fixture(power_save_disabled=False, driver="rtw88")
         g.fail_paths = {g.MODPROBE_CONF_PATH}
         result = await g.plugin.set_power_save(True)
         self.assertFalse(result["success"])
@@ -764,7 +764,7 @@ class TruthfulResultsTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(g.get_settings()["power_save_disabled"])
 
         # PCIe ASPM write failure reports its own code.
-        h = self.fixture(driver="rtw88")
+        h = self.fixture(power_save_disabled=False, driver="rtw88")
         h.fail_paths = {PCIE_DEVICE + "/link/l0s_aspm"}
         result = await h.plugin.set_power_save(True)
         self.assertFalse(result["success"])

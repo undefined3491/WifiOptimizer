@@ -841,7 +841,11 @@ class Plugin:
 
     def _apply_driver_fixes(self, enable: bool):
         """Apply or revert driver-specific power save fixes from DRIVER_PROFILES.
-        Silently no-ops for drivers with no sysfs paths or modprobe options."""
+        Silently no-ops for drivers with no sysfs paths or modprobe options.
+        Returns None on success, else (error_code, detail): sysfs_failed
+        when a present sysfs knob cannot be written (absent paths are
+        skipped), modprobe_failed when the modprobe conf cannot be
+        written or removed."""
         settings = _load_settings()
         profile = DRIVER_PROFILES.get(settings.get("driver"), {})
 
@@ -852,8 +856,10 @@ class Plugin:
                     f.write(val)
             except FileNotFoundError:
                 pass
-            except PermissionError:
-                decky.logger.info(f"sysfs path not writable: {path}")
+            except OSError as e:
+                detail = f"{path}: {e}"
+                decky.logger.error(f"sysfs write failed: {detail}")
+                return ("sysfs_failed", detail)
 
         options = profile.get("modprobe_options", [])
         if enable and options:
@@ -864,25 +870,34 @@ class Plugin:
                     for opt in options:
                         f.write(opt + "\n")
             except Exception as e:
+                detail = f"{MODPROBE_CONF_PATH}: {e}"
                 decky.logger.error(f"Failed to write modprobe config: {e}")
+                return ("modprobe_failed", detail)
         elif not enable:
             try:
                 os.remove(MODPROBE_CONF_PATH)
             except FileNotFoundError:
                 pass
+            except Exception as e:
+                detail = f"{MODPROBE_CONF_PATH}: {e}"
+                decky.logger.error(f"Failed to remove modprobe config: {e}")
+                return ("modprobe_failed", detail)
+        return None
 
     def _apply_pcie_aspm_fix(self, enable: bool):
         """Disable or restore PCIe ASPM for the WiFi device.
         Prevents throughput degradation during sustained streaming.
-        Works on all PCIe-attached WiFi adapters."""
+        Works on all PCIe-attached WiFi adapters. Returns None on success,
+        else ("pcie_failed", detail). An absent device or absent knobs stay
+        silent no-ops; present-but-unwritable knobs fail loudly."""
         try:
             # Discover WiFi PCI device path dynamically
             iface = self._get_wifi_interface()
             if not iface:
-                return
+                return None
             device_link = os.path.realpath(f"/sys/class/net/{iface}/device")
             if not os.path.isdir(device_link):
-                return
+                return None
 
             # Disable/restore PCIe ASPM L-states
             link_dir = os.path.join(device_link, "link")
@@ -894,25 +909,38 @@ class Plugin:
                     try:
                         with open(path, "w") as f:
                             f.write(val)
-                    except (FileNotFoundError, PermissionError):
+                    except FileNotFoundError:
                         pass
+                    except OSError as e:
+                        detail = f"{path}: {e}"
+                        decky.logger.error(f"PCIe ASPM write failed: {detail}")
+                        return ("pcie_failed", detail)
 
             # Disable/restore PCI runtime power management
             power_control = os.path.join(device_link, "power", "control")
             try:
                 with open(power_control, "w") as f:
                     f.write("on" if enable else "auto")
-            except (FileNotFoundError, PermissionError):
+            except FileNotFoundError:
                 pass
+            except OSError as e:
+                detail = f"{power_control}: {e}"
+                decky.logger.error(f"PCIe power control write failed: {detail}")
+                return ("pcie_failed", detail)
 
             if enable:
                 decky.logger.info(f"PCIe ASPM disabled for {device_link}")
             else:
                 decky.logger.info(f"PCIe ASPM restored for {device_link}")
+            return None
         except Exception as e:
+            detail = str(e)
             decky.logger.error(f"PCIe ASPM fix error: {e}")
+            return ("pcie_failed", detail)
 
     def _install_dispatcher(self):
+        """Install the NM dispatcher script. Returns None on success, else
+        ("dispatcher_failed", detail)."""
         try:
             template_path = os.path.join(
                 decky.DECKY_PLUGIN_DIR, "defaults", "dispatcher.sh.tmpl"
@@ -925,17 +953,23 @@ class Plugin:
                 f.write(script)
             os.chmod(DISPATCHER_PATH, 0o755)
             decky.logger.info("Dispatcher script installed")
+            return None
         except Exception as e:
             decky.logger.error(f"Failed to install dispatcher: {e}")
+            return ("dispatcher_failed", str(e))
 
     def _remove_dispatcher(self):
+        """Remove the NM dispatcher script. Returns None on success (or
+        when already absent), else ("dispatcher_failed", detail)."""
         try:
             os.remove(DISPATCHER_PATH)
             decky.logger.info("Dispatcher script removed")
+            return None
         except FileNotFoundError:
-            pass
+            return None
         except Exception as e:
             decky.logger.error(f"Failed to remove dispatcher: {e}")
+            return ("dispatcher_failed", str(e))
 
     def _rotate_logs(self, keep: int = 10):
         """Prune old log files on plugin startup. Decky does not rotate plugin
@@ -1088,7 +1122,15 @@ class Plugin:
                 )
                 errors.append("fallback:sysctl")
                 for key, value in SYSCTL_DEFAULTS.items():
-                    self._run_cmd(["/usr/bin/sysctl", "-w", f"{key}={value}"])
+                    result = self._run_cmd(
+                        ["/usr/bin/sysctl", "-w", f"{key}={value}"]
+                    )
+                    if not result["success"]:
+                        detail = f"{key}: {result.get('stderr', '')}"
+                        decky.logger.error(
+                            f"sysctl {key}={value} failed: {detail}"
+                        )
+                        errors.append(f"sysctl_failed: {detail}")
             iface = self._get_wifi_interface()
             if iface:
                 # Ordered restore: qdisc before txqueuelen.
@@ -1101,9 +1143,16 @@ class Plugin:
                         f"snapshot restore fallback for qdisc: {restore_err}"
                     )
                     errors.append("fallback:qdisc")
-                    self._run_cmd(
+                    qdisc_result = self._run_cmd(
                         ["/usr/bin/tc", "qdisc", "del", "dev", iface, "root"]
                     )
+                    if not qdisc_result.get("success"):
+                        qdisc_stderr = qdisc_result.get("stderr", "")
+                        if (
+                            "No such qdisc" not in qdisc_stderr
+                            and "No such file" not in qdisc_stderr
+                        ):
+                            errors.append(f"qdisc_failed: {qdisc_stderr}")
                 try:
                     restore_err = self._restore_slot("txqueuelen")
                 except Exception as e:
@@ -1114,7 +1163,7 @@ class Plugin:
                         f"{restore_err}"
                     )
                     errors.append("fallback:txqueuelen")
-                    self._run_cmd(
+                    txq_result = self._run_cmd(
                         [
                             "/usr/bin/ip",
                             "link",
@@ -1124,6 +1173,11 @@ class Plugin:
                             "1000",
                         ]
                     )
+                    if not txq_result.get("success"):
+                        errors.append(
+                            "txqueuelen_failed: "
+                            f"{txq_result.get('stderr', '')}"
+                        )
                 try:
                     restore_err = self._restore_slot("power_save")
                 except Exception as e:
@@ -1648,13 +1702,18 @@ class Plugin:
             if settings.get("band_preference_enabled") and live_band != expected_band:
                 status["drift"]["band_preference"] = True
 
-            # Buffer tuning
-            sysctl_result = self._run_cmd(
-                ["/usr/bin/sysctl", "-n", "net.core.rmem_max"], timeout=T
-            )
-            current_rmem = sysctl_result.get("stdout", "").strip()
-            status["live"]["buffer_tuning_applied"] = current_rmem == "16777216"
-            if settings.get("buffer_tuning_enabled") and current_rmem != "16777216":
+            # Buffer tuning: compare every SYSCTL_PARAMS key, not just
+            # rmem_max; any mismatch means not applied. (txqueuelen stays
+            # out: iface-dependent with CAKE interplay.)
+            buffer_applied = True
+            for sysctl_key, sysctl_want in SYSCTL_PARAMS.items():
+                sysctl_result = self._run_cmd(
+                    ["/usr/bin/sysctl", "-n", sysctl_key], timeout=T
+                )
+                if sysctl_result.get("stdout", "").strip() != sysctl_want:
+                    buffer_applied = False
+            status["live"]["buffer_tuning_applied"] = buffer_applied
+            if settings.get("buffer_tuning_enabled") and not buffer_applied:
                 status["drift"]["buffer_tuning"] = True
 
             # CAKE QoS
@@ -1718,12 +1777,44 @@ class Plugin:
                         }
 
                 # Write or remove NM config (persistent layer)
-                os.makedirs(os.path.dirname(NM_CONF_PATH), exist_ok=True)
-                with open(NM_CONF_PATH, "w") as f:
-                    f.write("[connection]\nwifi.powersave = 2\n")
+                try:
+                    os.makedirs(os.path.dirname(NM_CONF_PATH), exist_ok=True)
+                    with open(NM_CONF_PATH, "w") as f:
+                        f.write("[connection]\nwifi.powersave = 2\n")
+                except Exception as e:
+                    return {
+                        "success": False,
+                        "error": "nm_conf_failed",
+                        "message": "Couldn't write NetworkManager configuration",
+                        "detail": str(e),
+                        "errors": errors,
+                    }
 
-                self._apply_driver_fixes(True)
-                self._apply_pcie_aspm_fix(True)
+                driver_err = self._apply_driver_fixes(True)
+                if driver_err is not None:
+                    code, detail = driver_err
+                    return {
+                        "success": False,
+                        "error": code,
+                        "message": (
+                            "Couldn't write driver configuration"
+                            if code == "modprobe_failed"
+                            else "Couldn't apply driver power settings"
+                        ),
+                        "detail": detail,
+                        "errors": errors,
+                    }
+
+                pcie_err = self._apply_pcie_aspm_fix(True)
+                if pcie_err is not None:
+                    code, detail = pcie_err
+                    return {
+                        "success": False,
+                        "error": code,
+                        "message": "Couldn't configure PCIe power management",
+                        "detail": detail,
+                        "errors": errors,
+                    }
 
                 # Save settings only after success
                 settings = _load_settings()
@@ -1790,7 +1881,16 @@ class Plugin:
                     f"snapshot restore fallback for driver_sysfs: {restore_err}"
                 )
                 errors.append("fallback:driver_sysfs")
-                self._apply_driver_fixes(False)
+                driver_err = self._apply_driver_fixes(False)
+                if driver_err is not None:
+                    code, detail = driver_err
+                    return {
+                        "success": False,
+                        "error": code,
+                        "message": "Couldn't restore driver power settings",
+                        "detail": detail,
+                        "errors": errors,
+                    }
 
             try:
                 restore_err = self._restore_slot("file_modprobe_conf")
@@ -1806,6 +1906,14 @@ class Plugin:
                     os.remove(MODPROBE_CONF_PATH)
                 except FileNotFoundError:
                     pass
+                except Exception as e:
+                    return {
+                        "success": False,
+                        "error": "modprobe_failed",
+                        "message": "Couldn't remove driver configuration",
+                        "detail": str(e),
+                        "errors": errors,
+                    }
 
             try:
                 restore_err = self._restore_slot("pcie")
@@ -1816,7 +1924,16 @@ class Plugin:
                     f"snapshot restore fallback for pcie: {restore_err}"
                 )
                 errors.append("fallback:pcie")
-                self._apply_pcie_aspm_fix(False)
+                pcie_err = self._apply_pcie_aspm_fix(False)
+                if pcie_err is not None:
+                    code, detail = pcie_err
+                    return {
+                        "success": False,
+                        "error": code,
+                        "message": "Couldn't restore PCIe power management",
+                        "detail": detail,
+                        "errors": errors,
+                    }
 
             # Save settings only after success
             settings = _load_settings()
@@ -1840,7 +1957,16 @@ class Plugin:
                     decky.logger.info(
                         f"snapshot capture skipped for file_dispatcher: {e}"
                     )
-                self._install_dispatcher()
+                dispatcher_err = self._install_dispatcher()
+                if dispatcher_err is not None:
+                    code, detail = dispatcher_err
+                    return {
+                        "success": False,
+                        "error": code,
+                        "message": "Couldn't install auto-fix script",
+                        "detail": detail,
+                        "errors": errors,
+                    }
             else:
                 # Owned-only: a flag that is already false means this
                 # version did not install the dispatcher; leave whatever
@@ -1862,7 +1988,16 @@ class Plugin:
                         f"{restore_err}"
                     )
                     errors.append("fallback:file_dispatcher")
-                    self._remove_dispatcher()
+                    dispatcher_err = self._remove_dispatcher()
+                    if dispatcher_err is not None:
+                        code, detail = dispatcher_err
+                        return {
+                            "success": False,
+                            "error": code,
+                            "message": "Couldn't remove auto-fix script",
+                            "detail": detail,
+                            "errors": errors,
+                        }
 
             settings["auto_fix_on_wake"] = enabled
             _save_settings_with_timestamp(settings)
@@ -2325,6 +2460,17 @@ class Plugin:
 
                 result2 = self._nmcli_modify(uuid, "ipv4.ignore-auto-dns", "yes")
                 if not result2["success"]:
+                    # Paired-write atomicity: roll the first key back to its
+                    # snapshot prior (else clear) so the profile is never
+                    # left half-written. Intent is never saved on divergence.
+                    try:
+                        dns_restore_err = self._restore_slot(
+                            f"profile_{uuid}_ipv4.dns"
+                        )
+                    except Exception:
+                        dns_restore_err = "snapshot unavailable"
+                    if dns_restore_err is not None:
+                        self._nmcli_modify(uuid, "ipv4.dns", "")
                     return {
                         "success": False,
                         "error": "dns_partial",
@@ -2599,7 +2745,18 @@ class Plugin:
                         ["/usr/bin/sysctl", "-w", f"{key}={value}"]
                     )
                     if not result["success"]:
-                        decky.logger.error(f"sysctl {key}={value} failed: {result['stderr']}")
+                        # No rollback: writes are idempotent, retry
+                        # re-applies all keys and converges. The failure
+                        # names the failing key.
+                        detail = f"{key}: {result.get('stderr', '')}"
+                        decky.logger.error(f"sysctl {key}={value} failed: {detail}")
+                        return {
+                            "success": False,
+                            "error": "sysctl_failed",
+                            "message": "Couldn't apply kernel network settings",
+                            "detail": detail,
+                            "errors": errors,
+                        }
             else:
                 # Owned-only: a flag that is already false means this
                 # version never tuned the buffers; leave live state alone.
@@ -2624,9 +2781,17 @@ class Plugin:
                             ["/usr/bin/sysctl", "-w", f"{key}={value}"]
                         )
                         if not result["success"]:
+                            detail = f"{key}: {result.get('stderr', '')}"
                             decky.logger.error(
-                                f"sysctl {key}={value} failed: {result['stderr']}"
+                                f"sysctl {key}={value} failed: {detail}"
                             )
+                            return {
+                                "success": False,
+                                "error": "sysctl_failed",
+                                "message": "Couldn't restore kernel network settings",
+                                "detail": detail,
+                                "errors": errors,
+                            }
 
             # TX queue length (CAKE needs 256; defer to it if active)
             iface = self._get_wifi_interface()
@@ -2637,14 +2802,30 @@ class Plugin:
                         txq = "256"
                     else:
                         txq = "2000"
-                    self._run_cmd(
+                    txq_result = self._run_cmd(
                         ["/usr/bin/ip", "link", "set", iface, "txqueuelen", txq]
                     )
+                    if not txq_result.get("success"):
+                        return {
+                            "success": False,
+                            "error": "txqueuelen_failed",
+                            "message": "Couldn't set transmit queue length",
+                            "detail": txq_result.get("stderr", ""),
+                            "errors": errors,
+                        }
                 elif settings.get("cake_enabled"):
                     # CAKE still owns the queue length; leave it at 256.
-                    self._run_cmd(
+                    txq_result = self._run_cmd(
                         ["/usr/bin/ip", "link", "set", iface, "txqueuelen", "256"]
                     )
+                    if not txq_result.get("success"):
+                        return {
+                            "success": False,
+                            "error": "txqueuelen_failed",
+                            "message": "Couldn't set transmit queue length",
+                            "detail": txq_result.get("stderr", ""),
+                            "errors": errors,
+                        }
                 else:
                     restore_err = None
                     try:
@@ -2657,7 +2838,7 @@ class Plugin:
                             f"{restore_err}"
                         )
                         errors.append("fallback:txqueuelen")
-                        self._run_cmd(
+                        txq_result = self._run_cmd(
                             [
                                 "/usr/bin/ip",
                                 "link",
@@ -2667,6 +2848,14 @@ class Plugin:
                                 "1000",
                             ]
                         )
+                        if not txq_result.get("success"):
+                            return {
+                                "success": False,
+                                "error": "txqueuelen_failed",
+                                "message": "Couldn't restore transmit queue length",
+                                "detail": txq_result.get("stderr", ""),
+                                "errors": errors,
+                            }
             elif not enabled:
                 decky.logger.info(
                     "snapshot restore fallback for txqueuelen: no wifi interface"
@@ -2726,13 +2915,23 @@ class Plugin:
                 if not result["success"]:
                     return {
                         "success": False,
-                        "error": "unexpected",
+                        "error": "qdisc_failed",
                         "message": "Failed to apply CAKE qdisc.",
                         "detail": result.get("stderr", ""),
                         "errors": errors,
                     }
                 # Lower txqueuelen to complement CAKE's queue management
-                self._run_cmd(["/usr/bin/ip", "link", "set", iface, "txqueuelen", "256"])
+                txq_result = self._run_cmd(
+                    ["/usr/bin/ip", "link", "set", iface, "txqueuelen", "256"]
+                )
+                if not txq_result.get("success"):
+                    return {
+                        "success": False,
+                        "error": "txqueuelen_failed",
+                        "message": "Couldn't set transmit queue length",
+                        "detail": txq_result.get("stderr", ""),
+                        "errors": errors,
+                    }
                 decky.logger.info(f"CAKE enabled (unlimited) on {iface}")
             else:
                 restore_err = None
@@ -2745,14 +2944,41 @@ class Plugin:
                         f"snapshot restore fallback for qdisc: {restore_err}"
                     )
                     errors.append("fallback:qdisc")
-                    self._run_cmd(["/usr/bin/tc", "qdisc", "del", "dev", iface, "root"])
+                    qdisc_result = self._run_cmd(
+                        ["/usr/bin/tc", "qdisc", "del", "dev", iface, "root"]
+                    )
+                    if not qdisc_result.get("success"):
+                        qdisc_stderr = qdisc_result.get("stderr", "")
+                        if (
+                            "No such qdisc" not in qdisc_stderr
+                            and "No such file" not in qdisc_stderr
+                        ):
+                            return {
+                                "success": False,
+                                "error": "qdisc_failed",
+                                "message": "Couldn't remove traffic shaping",
+                                "detail": qdisc_stderr,
+                                "errors": errors,
+                            }
+                        decky.logger.info(
+                            "qdisc del idempotent (already absent): "
+                            f"{qdisc_stderr}"
+                        )
                 # Restore txqueuelen based on whether buffer tuning is active
                 settings = _load_settings()
                 if settings.get("buffer_tuning_enabled"):
                     # Buffer tuning still owns the queue length.
-                    self._run_cmd(
+                    txq_result = self._run_cmd(
                         ["/usr/bin/ip", "link", "set", iface, "txqueuelen", "2000"]
                     )
+                    if not txq_result.get("success"):
+                        return {
+                            "success": False,
+                            "error": "txqueuelen_failed",
+                            "message": "Couldn't set transmit queue length",
+                            "detail": txq_result.get("stderr", ""),
+                            "errors": errors,
+                        }
                 else:
                     try:
                         restore_err = self._restore_slot("txqueuelen")
@@ -2764,7 +2990,7 @@ class Plugin:
                             f"{restore_err}"
                         )
                         errors.append("fallback:txqueuelen")
-                        self._run_cmd(
+                        txq_result = self._run_cmd(
                             [
                                 "/usr/bin/ip",
                                 "link",
@@ -2774,6 +3000,14 @@ class Plugin:
                                 "1000",
                             ]
                         )
+                        if not txq_result.get("success"):
+                            return {
+                                "success": False,
+                                "error": "txqueuelen_failed",
+                                "message": "Couldn't restore transmit queue length",
+                                "detail": txq_result.get("stderr", ""),
+                                "errors": errors,
+                            }
                 decky.logger.info(f"CAKE disabled on {iface}")
 
             settings = _load_settings()
@@ -3010,9 +3244,11 @@ class Plugin:
                         ["/usr/bin/sysctl", "-w", f"{key}={value}"]
                     )
                     if not result["success"]:
+                        detail = f"{key}: {result.get('stderr', '')}"
                         decky.logger.error(
-                            f"sysctl {key}={value} failed: {result['stderr']}"
+                            f"sysctl {key}={value} failed: {detail}"
                         )
+                        errors.append(f"sysctl_failed: {detail}")
 
             iface = self._get_wifi_interface()
             if iface:
@@ -3026,9 +3262,16 @@ class Plugin:
                         f"snapshot restore fallback for qdisc: {restore_err}"
                     )
                     errors.append("fallback:qdisc")
-                    self._run_cmd(
+                    qdisc_result = self._run_cmd(
                         ["/usr/bin/tc", "qdisc", "del", "dev", iface, "root"]
                     )
+                    if not qdisc_result.get("success"):
+                        qdisc_stderr = qdisc_result.get("stderr", "")
+                        if (
+                            "No such qdisc" not in qdisc_stderr
+                            and "No such file" not in qdisc_stderr
+                        ):
+                            errors.append(f"qdisc_failed: {qdisc_stderr}")
                 try:
                     restore_err = self._restore_slot("txqueuelen")
                 except Exception as e:
@@ -3039,7 +3282,7 @@ class Plugin:
                         f"{restore_err}"
                     )
                     errors.append("fallback:txqueuelen")
-                    self._run_cmd(
+                    txq_result = self._run_cmd(
                         [
                             "/usr/bin/ip",
                             "link",
@@ -3049,6 +3292,11 @@ class Plugin:
                             "1000",
                         ]
                     )
+                    if not txq_result.get("success"):
+                        errors.append(
+                            "txqueuelen_failed: "
+                            f"{txq_result.get('stderr', '')}"
+                        )
             else:
                 decky.logger.info(
                     "snapshot restore fallback for qdisc/txqueuelen: "
@@ -3106,7 +3354,7 @@ class Plugin:
                 with open(NM_CONF_PATH, "w") as f:
                     f.write("[connection]\nwifi.powersave = 2\n")
             except Exception as e:
-                errors.append(f"nm_conf_write_failed: {e}")
+                errors.append(f"nm_conf_failed: {e}")
 
             # (c) Converge dispatcher to auto_fix_on_wake=True.
             try:
@@ -3115,9 +3363,10 @@ class Plugin:
                 decky.logger.info(
                     f"snapshot capture skipped for file_dispatcher: {e}"
                 )
-            self._install_dispatcher()
-            if not os.path.isfile(DISPATCHER_PATH):
-                errors.append("dispatcher_install_failed")
+            dispatcher_err = self._install_dispatcher()
+            if dispatcher_err is not None:
+                code, detail = dispatcher_err
+                errors.append(f"{code}: {detail}")
 
             # (d) Per-profile cleanup before wiping settings.json: clear
             # exactly each known owner's keys, then a single conditional
@@ -3149,8 +3398,11 @@ class Plugin:
             _save_settings(fresh)
 
             decky.logger.info("Settings reset to defaults")
+            # A non-empty errors list means defaults were not fully
+            # restored: report failure so the UI can offer a retry instead
+            # of masking the gap as success.
             return {
-                "success": True,
+                "success": not errors,
                 "message": "Settings reset to defaults",
                 "errors": errors,
             }
