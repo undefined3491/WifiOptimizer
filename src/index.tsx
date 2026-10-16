@@ -115,6 +115,16 @@ function Content() {
   const [applyingAll, setApplyingAll] = useState(false);
   const [optimizeResult, setOptimizeResult] = useState<OptimizeSafeResult | null>(null);
   const [customDnsInput, setCustomDnsInput] = useState("");
+  // DNS draft/applied split (ST0-012/015, D3): the provider dropdown and
+  // the custom field edit the draft only. Applied values stay read-only
+  // in status.settings.*. providerDraft null = follow applied.
+  const [dnsProviderDraft, setDnsProviderDraft] = useState<string | null>(null);
+  const [dnsAddressesDraft, setDnsAddressesDraft] = useState("");
+  const [dnsDirty, setDnsDirty] = useState(false);
+  const [dnsFocused, setDnsFocused] = useState(false);
+  // Local empty-custom validation error. Rendered with the field mounted
+  // so an error never hides the only way to fix it.
+  const [dnsDraftError, setDnsDraftError] = useState<string | null>(null);
   // Visible action outcomes: rejections land in actionError; transfer
   // warnings, setter errors[] and reset errors[] land in actionWarnings.
   const [actionError, setActionError] = useState<string | null>(null);
@@ -142,6 +152,11 @@ function Content() {
   const prevConnectedRef = useRef<boolean | null>(null);
   const statusRef = useRef<PluginStatus | null>(null);
   const lastUpdateCheckAtRef = useRef<number>(0);
+  // Ref mirrors for the guarded DNS refresh (D3): refreshStatus is a
+  // stable callback, so it reads these instead of closing over state.
+  const dnsProviderDraftRef = useRef<string | null>(null);
+  const dnsDirtyRef = useRef(false);
+  const dnsFocusedRef = useRef(false);
 
   const setBusy = useCallback((val: boolean) => {
     busyRef.current = val;
@@ -183,8 +198,13 @@ function Content() {
         setIsStale(false);
         setStatusAt(Date.now());
         if (s.settings) {
-          if (s.settings.dns_provider === "custom") {
-            setCustomDnsInput(s.settings.dns_servers || "");
+          // Guarded refresh (D3): polling must never eat keystrokes. The
+          // applied mirror updates only when no draft is pending, nothing
+          // was typed, and the field isn't focused.
+          if (!dnsDirtyRef.current && !dnsFocusedRef.current && dnsProviderDraftRef.current === null) {
+            if (s.settings.dns_provider === "custom") {
+              setCustomDnsInput(s.settings.dns_servers || "");
+            }
           }
         }
       } else {
@@ -370,13 +390,25 @@ function Content() {
     };
   }, [runUpdateCheck]);
 
+  // Ref mirrors for the guarded DNS refresh (D3). refreshStatus reads
+  // the refs so it stays a stable callback while drafts change.
+  useEffect(() => {
+    dnsProviderDraftRef.current = dnsProviderDraft;
+  }, [dnsProviderDraft]);
+  useEffect(() => {
+    dnsDirtyRef.current = dnsDirty;
+  }, [dnsDirty]);
+  useEffect(() => {
+    dnsFocusedRef.current = dnsFocused;
+  }, [dnsFocused]);
+
   // ---- User action handlers ----
   //
   // Generic toggle handler used by every setter toggle (power_save, BSSID,
   // auto_fix, buffer_tuning, band_preference, DNS, IPv6) and by the Force
   // Reapply All button. Takes a key for error tracking and a backend fn.
-  const handleToggle = async (key: string, fn: () => Promise<MethodResult>) => {
-    if (busyRef.current) return;
+  const handleToggle = async (key: string, fn: () => Promise<MethodResult>): Promise<MethodResult | null> => {
+    if (busyRef.current) return null;
     setBusy(true);
     setActionError(null);
     setActionWarnings(null);
@@ -413,9 +445,11 @@ function Content() {
       if (result.reconnected) {
         await new Promise((r) => setTimeout(r, RECONNECT_DELAY));
       }
+      return result;
     } catch (e) {
       console.error(`WiFi Optimizer TMS: toggle ${key} failed`, e);
       setErrors((prev) => ({ ...prev, [key]: "Request failed. Please try again." }));
+      return null;
     } finally {
       // Refresh before clearing busy so toggles/badges don't briefly flip to
       // stale pre-operation values in the interim render. Refresh runs even on
@@ -487,10 +521,53 @@ function Content() {
     }
   };
 
+  // Shared aggregate ingestion for Force Reapply and Fix-now (D1): each
+  // failed child maps to its existing errors[child] key, the shared banner
+  // shows applied/total/failed, and total==0 renders the result message
+  // ("No drifted settings" for repair, "No optimizations enabled" for
+  // reapply). The old "reapply" error key is retired since no row renders it.
+  const ingestAggregateResult = (result: OptimizeSafeResult) => {
+    setOptimizeResult(result);
+    const childKeys = Object.keys(result.results ?? {});
+    const newErrors: Record<string, string> = {};
+    for (const [k, v] of Object.entries(result.results ?? {})) {
+      if (!v.success) {
+        const det = v.detail ? ` (${v.detail})` : "";
+        newErrors[k] = (v.message ?? ERROR_MESSAGES[v.error ?? ""] ?? "Failed") + det;
+      }
+    }
+    setErrors((prev) => {
+      const next = { ...prev };
+      for (const k of childKeys) delete next[k];
+      return { ...next, ...newErrors };
+    });
+    const warnings: string[] = [];
+    for (const v of Object.values(result.results ?? {})) {
+      if (v.transfer_warnings) warnings.push(...v.transfer_warnings);
+      if (v.errors) warnings.push(...v.errors);
+    }
+    const failedStages: string[] = [];
+    let anyUnverified = false;
+    for (const v of Object.values(result.results ?? {})) {
+      const rc = v.reconnect;
+      if (rc?.attempted && !rc.verified) {
+        anyUnverified = true;
+        for (const [name, st] of Object.entries(rc.stages ?? {})) {
+          if (st && !st.ok) failedStages.push(name);
+        }
+      }
+    }
+    if (anyUnverified) {
+      warnings.push(
+        `WiFi reconnect not verified${failedStages.length ? ` (${failedStages.join(", ")})` : ""}. Settings were saved; toggle WiFi off/on if needed.`
+      );
+    }
+    if (warnings.length) setActionWarnings(warnings);
+  };
+
   // Force Reapply has its own handler (not handleToggle): each failed
   // child maps to its existing errors[child] key, the shared banner shows
-  // applied/total/failed, and total==0 renders as info. The old "reapply"
-  // error key is retired since no row renders it.
+  // applied/total/failed, and total==0 renders as info.
   const handleForceReapply = async () => {
     if (busyRef.current) return;
     setBusy(true);
@@ -499,48 +576,39 @@ function Content() {
     setOptimizeResult(null);
     try {
       const result = await backend.reapplyAll();
-      setOptimizeResult(result);
-      const childKeys = Object.keys(result.results ?? {});
-      const newErrors: Record<string, string> = {};
-      for (const [k, v] of Object.entries(result.results ?? {})) {
-        if (!v.success) {
-          const det = v.detail ? ` (${v.detail})` : "";
-          newErrors[k] = (v.message ?? ERROR_MESSAGES[v.error ?? ""] ?? "Failed") + det;
-        }
-      }
-      setErrors((prev) => {
-        const next = { ...prev };
-        for (const k of childKeys) delete next[k];
-        return { ...next, ...newErrors };
-      });
-      const warnings: string[] = [];
-      for (const v of Object.values(result.results ?? {})) {
-        if (v.transfer_warnings) warnings.push(...v.transfer_warnings);
-        if (v.errors) warnings.push(...v.errors);
-      }
-      const failedStages: string[] = [];
-      let anyUnverified = false;
-      for (const v of Object.values(result.results ?? {})) {
-        const rc = v.reconnect;
-        if (rc?.attempted && !rc.verified) {
-          anyUnverified = true;
-          for (const [name, st] of Object.entries(rc.stages ?? {})) {
-            if (st && !st.ok) failedStages.push(name);
-          }
-        }
-      }
-      if (anyUnverified) {
-        warnings.push(
-          `WiFi reconnect not verified${failedStages.length ? ` (${failedStages.join(", ")})` : ""}. Settings were saved; toggle WiFi off/on if needed.`
-        );
-      }
-      if (warnings.length) setActionWarnings(warnings);
+      ingestAggregateResult(result);
       if (result.reconnected) {
         await new Promise((r) => setTimeout(r, RECONNECT_DELAY));
       }
     } catch (e) {
       console.error("force reapply error", e);
       setActionError("Force reapply failed. Please try again.");
+    } finally {
+      await refreshStatus(true);
+      setBusy(false);
+    }
+  };
+
+  // Fix-now repair (ST0-011, D1): re-applies only enabled-and-drifted
+  // settings via repair_drifted. One busy window, child→errors[child]
+  // mapping, a single RECONNECT_DELAY on result.reconnected, and a forced
+  // refresh before busy-clear. A top-level rejection lands in the same
+  // visible actionError as other aggregate handlers.
+  const handleRepair = async () => {
+    if (busyRef.current) return;
+    setBusy(true);
+    setActionError(null);
+    setActionWarnings(null);
+    setOptimizeResult(null);
+    try {
+      const result = await backend.repairDrifted();
+      ingestAggregateResult(result);
+      if (result.reconnected) {
+        await new Promise((r) => setTimeout(r, RECONNECT_DELAY));
+      }
+    } catch (e) {
+      console.error("repair drifted error", e);
+      setActionError("Couldn't repair drifted settings. Please try again.");
     } finally {
       await refreshStatus(true);
       setBusy(false);
@@ -570,6 +638,36 @@ function Content() {
     } finally {
       await refreshStatus(true);
       setBusy(false);
+    }
+  };
+
+  // Drop all three DNS draft fields without IPC (D3 Cancel, and the
+  // pre-toggle reset so the main on/off toggle never sends a raw draft).
+  const dropDnsDraft = () => {
+    setDnsProviderDraft(null);
+    setDnsAddressesDraft("");
+    setDnsDirty(false);
+    setDnsDraftError(null);
+  };
+
+  // DNS Apply (D3): custom-only validation, then a single toggle. Presets
+  // submit their stored servers; a stale draftAddresses is ignored for
+  // non-custom. Success clears all three draft fields. Backend rejections
+  // land in errors.dns via handleToggle (the last reporting line).
+  const handleDnsApply = async () => {
+    const applied = status?.settings;
+    const provider = dnsProviderDraft ?? applied?.dns_provider ?? "cloudflare";
+    if (provider === "custom" && !dnsAddressesDraft.trim()) {
+      setDnsDraftError("Enter at least one DNS server address.");
+      return;
+    }
+    setDnsDraftError(null);
+    const servers = provider === "custom" ? dnsAddressesDraft : "";
+    const r = await handleToggle("dns", () =>
+      backend.setDns(true, provider, servers)
+    );
+    if (r?.success) {
+      dropDnsDraft();
     }
   };
 
@@ -786,7 +884,7 @@ function Content() {
           {driftCount} setting{driftCount > 1 ? "s" : ""} drifted after wake.{" "}
           <span
             style={{ textDecoration: "underline", cursor: "pointer" }}
-            onClick={handleOptimize}
+            onClick={handleRepair}
           >
             Fix now
           </span>
@@ -878,7 +976,7 @@ function Content() {
               : "success";
         const text =
           optimizeResult.total === 0
-            ? "No optimizations enabled"
+            ? (optimizeResult.message ?? "No optimizations enabled")
             : failed > 0
               ? `${optimizeResult.applied}/${optimizeResult.total} applied (${failed} failed)`
               : "All applied";
@@ -976,15 +1074,18 @@ function Content() {
           label="Custom DNS"
           subtitle="Override DNS servers for this network"
           explanation="Your internet provider's DNS servers translate domain names into IP addresses. They can be slow or unreliable. Switching to a public DNS like Cloudflare (1.1.1.1) or Google (8.8.8.8) can speed up initial connections and improve reliability. This only affects the current WiFi network."
-          {...getBadge(undefined, status, errors.dns ?? null)}
+          {...getBadge("dns", status, errors.dns ?? null)}
           checked={s?.dns_enabled ?? false}
           disabled={mutationLocked || (!connected && !s?.dns_enabled)}
           error={errors.dns}
-          onChange={(val: boolean) =>
-            handleToggle("dns", () =>
-              backend.setDns(val, s?.dns_provider ?? "cloudflare", customDnsInput)
-            )
-          }
+          onChange={(val: boolean) => {
+            // Main toggle uses applied values and drops pending drafts,
+            // never the raw draft (D3).
+            const ap = s?.dns_provider ?? "cloudflare";
+            const as = s?.dns_servers ?? "";
+            dropDnsDraft();
+            handleToggle("dns", () => backend.setDns(val, ap, as));
+          }}
         >
           {s?.dns_enabled && (
             <>
@@ -992,31 +1093,65 @@ function Content() {
                 <DropdownItem
                   label="DNS Provider"
                   rgOptions={DNS_OPTIONS}
-                  selectedOption={s?.dns_provider ?? "cloudflare"}
+                  selectedOption={dnsProviderDraft ?? s?.dns_provider ?? "cloudflare"}
+                  disabled={mutationLocked}
                   onChange={(option: { data: string }) => {
-                    const custom = option.data === "custom" ? customDnsInput : "";
-                    handleToggle("dns", () =>
-                      backend.setDns(true, option.data, custom)
-                    );
+                    // Draft only: never submits (D3). Switching to Custom
+                    // mounts the field prefilled from applied servers.
+                    setDnsDraftError(null);
+                    setDnsProviderDraft(option.data);
+                    if (option.data === "custom") {
+                      setDnsAddressesDraft(customDnsInput || s?.dns_servers || "");
+                    }
+                    setDnsDirty(false);
                   }}
                 />
               </PanelSectionRow>
-              {s?.dns_provider === "custom" && (
+              {(dnsProviderDraft ?? s?.dns_provider) === "custom" && (
                 <PanelSectionRow>
                   <TextField
                     label="DNS servers (space-separated)"
-                    value={customDnsInput}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                      setCustomDnsInput(e.target.value)
-                    }
-                    onBlur={() => {
-                      if (customDnsInput) {
-                        handleToggle("dns", () =>
-                          backend.setDns(true, "custom", customDnsInput)
-                        );
-                      }
+                    value={dnsProviderDraft !== null ? dnsAddressesDraft : customDnsInput}
+                    disabled={mutationLocked}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                      // Typing adopts/updates the draft and marks it dirty;
+                      // never submits (D3).
+                      if (dnsProviderDraft === null) setDnsProviderDraft("custom");
+                      setDnsAddressesDraft(e.target.value);
+                      setDnsDirty(true);
                     }}
+                    onFocus={() => setDnsFocused(true)}
+                    onBlur={() => setDnsFocused(false)}
                   />
+                </PanelSectionRow>
+              )}
+              {dnsDraftError && (
+                <PanelSectionRow>
+                  <div style={{ fontSize: theme.fontSize.small, color: theme.error.text }}>
+                    {dnsDraftError}
+                  </div>
+                </PanelSectionRow>
+              )}
+              {dnsProviderDraft !== null && (
+                <PanelSectionRow>
+                  <ButtonItem
+                    layout="below"
+                    disabled={mutationLocked}
+                    onClick={handleDnsApply}
+                  >
+                    Apply DNS
+                  </ButtonItem>
+                </PanelSectionRow>
+              )}
+              {dnsProviderDraft !== null && (
+                <PanelSectionRow>
+                  <ButtonItem
+                    layout="below"
+                    disabled={mutationLocked}
+                    onClick={dropDnsDraft}
+                  >
+                    Cancel
+                  </ButtonItem>
                 </PanelSectionRow>
               )}
             </>
