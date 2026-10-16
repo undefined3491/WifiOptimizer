@@ -37,7 +37,7 @@
 - Consumes: AST-extracted `repair_drifted` (to be created — test the spec'd name/signature/shape), `get_status` drift section, setters; stubbed `_run_cmd` + in-memory settings/snapshot (established patterns).
 - Produces: `RepairFixture` used by Task 2.
 
-- [ ] **Step 1: Write failing tests**: `repair_only_enabled_and_drifted`, `repair_leaves_disabled_alone`, `repair_no_radio_for_healthy`, `repair_total_zero_message`, `repair_unknown_owner_fails_child_only`, `repair_backend_drift_excluded`, `dns_drift_detected`.
+- [ ] **Step 1: Write failing tests**: `repair_only_enabled_and_drifted`, `repair_leaves_disabled_alone`, `repair_no_radio_for_healthy`, `repair_total_zero_message` (exact `"No drifted settings"`), `repair_unknown_owner_fails_child_only`, `repair_backend_drift_excluded`, `repair_skips_auto_fix`, `repair_repairs_dns_drift`, `dns_drift_detected` (IP-set subset rule), `selection_is_read_only` (`save_count==0`, zero `_nmcli_modify`), `repair_drifted_ipc_shape` (static: method exists with 0 args + `"repair_drifted"` in `src/backend.ts`).
 - [ ] **Step 2: Run to verify they fail with AssertionError (not ImportError/NameError)** Run: `python -m unittest tests.test_repair_drift -v` Expected: FAIL on behavior asserts (baseline suite stays 101 green).
 - [ ] **Step 3: Add fixture only** (no production change); re-run: imports clean, behavior asserts still FAIL.
 - [ ] **Step 4: Run full suite** `python -m unittest discover -s tests` Expected: new file red, all other files green.
@@ -55,7 +55,7 @@
 
 - [ ] **Step 1: Verify red** Expected: FAIL on repair tests.
 - [ ] **Step 2a: Implement drift-formula helper** shared by `get_status` and `repair_drifted`.
-- [ ] **Step 2b: Implement `repair_drifted`** per D1 (fresh read, enabled∩drifted, order/aggregation like `reapply_all`, `total==0` message, child `unknown_owner` contained).
+- [ ] **Step 2b: Implement `repair_drifted`** per D1 (fresh read-only selection via the shared helper, enabled∩drifted, order/aggregation like `reapply_all`, `total==0` message, child `unknown_owner` contained).
 - [ ] **Step 2c: Implement `drift.dns`** per D2 + backend.ts wrapper with the exact name.
 - [ ] **Step 3: Run** `python -m unittest tests.test_repair_drift -v` Expected: PASS.
 - [ ] **Step 4: Run full suite + syntax** `python -m unittest discover -s tests`; preflight `bash --version`; `python -m py_compile main.py`.
@@ -67,7 +67,7 @@
 - Modify: `src/index.tsx` (banner `onClick` → `handleRepair`, new handler, DNS draft state machine + Apply/Cancel row)
 - Test: typecheck + build + review checklist (no frontend unit infra)
 
-**Render checklist (verify by reading code):** banner calls `handleRepair` (one busy window, child→errors mapping, single reconnect wait, forced refresh before clear); dropdown sets draft only; field mounts on draft-or-applied custom prefilled from applied servers; typing never submits; blur never submits; Apply validates non-empty then single toggle; Cancel IPC-free; refresh guarded by `!dirty && !focused && providerDraft===null`; main toggle uses applied values; empty-custom error renders with field mounted; draft controls honor `mutationLocked`.
+**Render checklist (verify by reading code):** banner calls `handleRepair` (one busy window, child→errors mapping, single reconnect wait, forced refresh before clear); outcome banner is message-aware (`"No drifted settings"` vs reapply text) with top-level catch → `actionError`; DNS row uses `getBadge("dns", ...)`; dropdown sets draft only; field mounts on draft-or-applied custom prefilled from applied servers; typing never submits; blur never submits; custom-only Apply validation then single toggle; Cancel IPC-free; refresh guarded by `!dirty && !focused && providerDraft===null`; main toggle uses applied values and drops drafts; empty-custom error renders with field mounted; draft controls honor `mutationLocked`.
 
 - [ ] **Step 1: Implement banner + `handleRepair`** per D1.
 - [ ] **Step 2: Implement DNS draft machine** per D3.
@@ -78,10 +78,10 @@
 ### Task 4: Poll lifecycle + dismount safety (D4/D5)
 
 **Files:**
-- Modify: `src/index.tsx` (poll retry/reconcile/bounds/guard), `src/components/PanelFooter.tsx` (timeout ids + cleanup)
+- Modify: `src/index.tsx` (poll retry/reconcile/bounds/guard), `src/components/BackendToggleRow.tsx` (`canRetry` prop + enabled logic + `unknown` representation), `src/components/PanelFooter.tsx` (timeout ids + cleanup)
 - Test: typecheck + build + review checklist (no timer unit harness)
 
-**Review checklist (verify by reading code):** one bounded retry then error+lock; `canRetry` independent of `mutationLocked`; retry click and next successful status reconcile the error; `in_progress` tick-bound → `unknown`; no overlapping poll ticks; reapplyTimer id + `clearTimeout` + disposed early-return; `disposedRef` checked after every listed await; `backendPollRef` nulled on cleanup; footer timeouts cleared on unmount; launch→dismount→fire path does zero IPC/state writes.
+**Review checklist (verify by reading code):** one bounded retry then error+lock; `canRetry = error!=null && !in_progress && !isBusy` on the Retry button independent of `mutationLocked`; retry click and next successful status reconcile the error; `in_progress` tick-bound → `unknown`; no overlapping poll ticks; reapplyTimer id + `clearTimeout` + disposed early-return; `disposedRef` checked after every listed await (poll, reconnect waits, update check, refresh status); `backendPollRef` nulled on cleanup; footer timeouts cleared on unmount; launch→dismount→fire path does zero IPC/state writes.
 
 - [ ] **Step 1: Implement poll retry + reconciliation + bounds + guard** per D4.
 - [ ] **Step 2: Implement dismount safety** per D5.
