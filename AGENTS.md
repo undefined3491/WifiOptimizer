@@ -1,4 +1,4 @@
-# AGENTS.md — WiFi Optimizer (Decky Loader plugin)
+# AGENTS.md — WiFi Optimizer TMS (Decky Loader plugin)
 
 Decky plugin (Steam Deck / handhelds): React TS frontend + Python backend (runs as **root** in `plugin_loader`) + NetworkManager dispatcher script for wake/reconnect persistence.
 
@@ -20,6 +20,12 @@ Decky plugin (Steam Deck / handhelds): React TS frontend + Python backend (runs 
 - The owner can test on a Steam Deck LCD using SteamOS Stable. Capture exact installed OS/kernel/driver/backend/Decky versions; "latest" is not a version. Beta/Preview is optional later compatibility coverage, not a replacement for Stable tests. Other hardware/distributions remain unverified in this fork until results are recorded.
 - Reassess each optimization against current official SteamOS notes and actual device behavior. A vendor fix is a reason to investigate relevance, not proof that a tweak is obsolete or safe. Record dated primary sources and separate Stable from Beta/Preview.
 - Resolve all Critical/Important audit findings and record candidate-specific device evidence before preparing the first Stable release. Keep release scope/version provisional until the audit determines the required fixes. Revisit affected compatibility evidence after relevant OS, driver or Decky changes.
+
+## Branding stages and compatibility
+
+- Public plugin/manifest/frontend name: `WiFi Optimizer TMS`; package name: `wifi-optimizer-tms`, selected by the owner. Follow [the staged branding record](docs/branding.md); do not infer a completed GitHub rename or device migration from source changes.
+- Keep the existing technical directory key `WiFi Optimizer` in the installer and VS Code deployment settings; Decky settings/data/log paths derive from that directory. Keep `99-wifi-optimizer*`, temporary paths and logger identifiers compatible. Display names and the source-map URI use the TMS name. Do not move/delete settings, reset or uninstall to apply branding.
+- The live repository, installer/updater URLs, archive roots and release repository guard remain `undefined3491/WifiOptimizer` until the separate coordinated repository cutover. Preserve upstream credits, version continuity and all Stage 0 release gates.
 
 ## Repository and updates
 

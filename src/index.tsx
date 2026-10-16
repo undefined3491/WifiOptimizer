@@ -80,14 +80,14 @@ class ErrorBoundary extends Component<
   }
 
   componentDidCatch(err: Error, info: ErrorInfo) {
-    console.error("WiFi Optimizer render error:", err, info);
+    console.error("WiFi Optimizer TMS render error:", err, info);
   }
 
   render() {
     if (this.state.err) {
       return (
         <Banner variant="error">
-          WiFi Optimizer hit an unexpected error. Close and reopen the panel to
+          WiFi Optimizer TMS hit an unexpected error. Close and reopen the panel to
           recover. If it keeps happening, please report at
           github.com/undefined3491/WifiOptimizer.
         </Banner>
@@ -164,7 +164,7 @@ function Content() {
         }
       }
     } catch (e) {
-      console.error("WiFi Optimizer: failed to get status", e);
+      console.error("WiFi Optimizer TMS: failed to get status", e);
     }
   }, []);
 
@@ -282,7 +282,7 @@ function Content() {
   useEffect(() => {
     if (!updating) return;
     const id = setTimeout(() => {
-      console.error("WiFi Optimizer: update didn't complete within 60s");
+      console.error("WiFi Optimizer TMS: update didn't complete within 60s");
       setUpdating(false);
       setUpdateError(
         "Update didn't complete. Try again, or reinstall manually from Konsole."
@@ -489,7 +489,7 @@ function Content() {
 
   // Don't render content until first status arrives (prevents disconnect flash)
   if (!status) {
-    return <PanelSection title="WiFi Optimizer" />;
+    return <PanelSection title="WiFi Optimizer TMS" />;
   }
 
   const s = status?.settings;
@@ -842,12 +842,12 @@ export default definePlugin(() => {
       },
     );
   } catch (e) {
-    console.error("WiFi Optimizer: failed to register game launch listener", e);
+    console.error("WiFi Optimizer TMS: failed to register game launch listener", e);
   }
 
   return {
-    name: "WiFi Optimizer",
-    titleView: <div className={staticClasses.Title}>WiFi Optimizer</div>,
+    name: "WiFi Optimizer TMS",
+    titleView: <div className={staticClasses.Title}>WiFi Optimizer TMS</div>,
     content: (
       <ErrorBoundary>
         <Content />

@@ -6,6 +6,10 @@ Use a short-lived `codex/<change>` branch, as required by the owner's latest ins
 
 Merging does not publish a release. Documentation and CI-only changes do not need a version bump. Do not push directly to `main` or publish Stable automatically on merge.
 
+## Branding and deployment paths
+
+The public name is `WiFi Optimizer TMS`, and `package.json` uses `wifi-optimizer-tms`. The GitHub repository is still `undefined3491/WifiOptimizer`. Keep `.vscode/defsettings.json` / local settings `pluginname` at `WiFi Optimizer`: it selects the existing install/settings directory, not the visible label. Follow [the branding stages](docs/branding.md) before changing repository URLs, archive roots or device paths. A source rename does not publish or deploy the plugin.
+
 ## Local checks and generated files
 
 Use Node.js and pnpm 9. Install from the frozen lockfile and run the same build and source type check used by CI:

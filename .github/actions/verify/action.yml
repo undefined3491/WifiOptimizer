@@ -1,5 +1,5 @@
 name: Verify plugin
-description: Build and verify committed WiFi Optimizer artifacts
+description: Build and verify committed WiFi Optimizer TMS artifacts
 runs:
   using: composite
   steps:

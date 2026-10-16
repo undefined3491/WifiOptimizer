@@ -1,10 +1,12 @@
 #!/bin/bash
-# WiFi Optimizer - Decky Plugin Installer
+# WiFi Optimizer TMS - Decky Plugin Installer
 # Usage: curl -sL https://github.com/undefined3491/WifiOptimizer/raw/main/install.sh -o /tmp/wifi-opt-install.sh && sudo bash /tmp/wifi-opt-install.sh
 
 set -e
 
+# Compatibility directory key; the public name comes from plugin.json.
 PLUGIN_NAME="WiFi Optimizer"
+PLUGIN_DISPLAY_NAME="WiFi Optimizer TMS"
 
 # Check for root (needed to write to plugin dir and restart service)
 if [ "$(id -u)" -ne 0 ]; then
@@ -51,7 +53,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Installing $PLUGIN_NAME..."
+echo "Installing $PLUGIN_DISPLAY_NAME..."
 
 # Download and extract
 echo "Downloading..."
@@ -90,7 +92,7 @@ systemctl restart plugin_loader 2>/dev/null || true
 
 echo ""
 if [ "$UPGRADING" = true ]; then
-    echo "WiFi Optimizer updated! Your settings have been preserved."
+    echo "$PLUGIN_DISPLAY_NAME updated! Your settings have been preserved."
 else
-    echo "WiFi Optimizer installed! Open the Quick Access Menu to configure."
+    echo "$PLUGIN_DISPLAY_NAME installed! Open the Quick Access Menu to configure."
 fi
