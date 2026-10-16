@@ -101,9 +101,11 @@ DMI_SUBSTRING_DEVICES = [
 try:
     SETTINGS_FILE = os.path.join(decky.DECKY_PLUGIN_SETTINGS_DIR, "settings.json")
     ENFORCED_FILE = os.path.join(decky.DECKY_PLUGIN_SETTINGS_DIR, "last_enforced")
+    SNAPSHOT_FILE = os.path.join(decky.DECKY_PLUGIN_SETTINGS_DIR, "system_snapshot.json")
 except Exception:
     SETTINGS_FILE = "/tmp/wifi-optimizer/settings.json"
     ENFORCED_FILE = "/tmp/wifi-optimizer/last_enforced"
+    SNAPSHOT_FILE = "/tmp/wifi-optimizer/system_snapshot.json"
 
 DNS_PROVIDERS = {
     "cloudflare": "1.1.1.1 1.0.0.1",
@@ -197,6 +199,29 @@ def _save_settings_with_timestamp(data: dict):
     """Save settings and update last_applied timestamp in one write."""
     data["last_applied"] = int(time.time())
     _save_settings(data)
+
+
+def _load_snapshot() -> dict:
+    """Read SETTINGS_DIR/system_snapshot.json; {} when absent/unparseable.
+
+    The snapshot lives beside settings.json, never inside it: _load_settings
+    strips unknown keys, so in-settings slots would be silently dropped.
+    """
+    try:
+        with open(SNAPSHOT_FILE, "r") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_snapshot(data: dict) -> None:
+    """Atomically write the snapshot (.tmp + os.replace, like settings)."""
+    os.makedirs(os.path.dirname(SNAPSHOT_FILE), exist_ok=True)
+    tmp_path = SNAPSHOT_FILE + ".tmp"
+    with open(tmp_path, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp_path, SNAPSHOT_FILE)
 
 
 class Plugin:
@@ -355,6 +380,368 @@ class Plugin:
         if "network is unreachable" in d or "connection refused" in d:
             return "Network problem during the switch. Check WiFi and try again."
         return "The WiFi backend switch didn't take effect."
+
+    def _capture_slot(self, name: str) -> None:
+        """Capture the current value of snapshot slot `name` when absent.
+
+        Slot-once semantics: a present slot is never overwritten, so a
+        reboot (_main re-apply) can never clobber the pre-plugin baseline.
+        Never throws: capture failures are logged and the enable proceeds;
+        the matching restore then falls back to the assumed default.
+        """
+        try:
+            snapshot = _load_snapshot()
+        except Exception as e:
+            decky.logger.info(f"snapshot capture skipped for {name}: {e}")
+            return
+        if not isinstance(snapshot, dict):
+            snapshot = {}
+        if name in snapshot:
+            return
+        try:
+            if name == "sysctl":
+                values = {}
+                for key in SYSCTL_PARAMS:
+                    result = self._run_cmd(["/usr/bin/sysctl", "-n", key])
+                    if not result.get("success"):
+                        raise RuntimeError(f"sysctl read failed for {key}")
+                    values[key] = result.get("stdout", "").strip()
+                value = values
+            elif name == "txqueuelen":
+                iface = self._get_wifi_interface()
+                if not iface:
+                    raise RuntimeError("no wifi interface")
+                result = self._run_cmd(
+                    ["/usr/bin/ip", "link", "show", "dev", iface]
+                )
+                if not result.get("success"):
+                    raise RuntimeError("ip link show failed")
+                out = result.get("stdout", "")
+                txq = None
+                if "txqueuelen" in out:
+                    parts = out.split("txqueuelen", 1)[1].strip().split()
+                    if parts and parts[0].isdigit():
+                        txq = parts[0]
+                elif "qlen" in out:
+                    tokens = out.split()
+                    idx = tokens.index("qlen")
+                    if idx + 1 < len(tokens) and tokens[idx + 1].isdigit():
+                        txq = tokens[idx + 1]
+                if txq is None:
+                    raise RuntimeError("txqueuelen not parseable")
+                value = {"iface": iface, "value": txq}
+            elif name == "qdisc":
+                iface = self._get_wifi_interface()
+                if not iface:
+                    raise RuntimeError("no wifi interface")
+                result = self._run_cmd(
+                    ["/usr/bin/tc", "qdisc", "show", "dev", iface]
+                )
+                if not result.get("success"):
+                    raise RuntimeError("tc qdisc show failed")
+                value = {"iface": iface, "output": result.get("stdout", "")}
+            elif name == "power_save":
+                iface = self._get_wifi_interface()
+                if not iface:
+                    value = {"iface": None, "value": None}
+                else:
+                    result = self._run_cmd(
+                        ["/usr/bin/iw", "dev", iface, "get", "power_save"]
+                    )
+                    if not result.get("success"):
+                        raise RuntimeError("iw power_save read failed")
+                    stdout = result.get("stdout", "")
+                    value = {
+                        "iface": iface,
+                        "value": "off"
+                        if "Power save: off" in stdout
+                        else "on",
+                    }
+            elif name == "pcie":
+                iface = self._get_wifi_interface()
+                if not iface:
+                    raise RuntimeError("no wifi interface")
+                device_link = os.path.realpath(f"/sys/class/net/{iface}/device")
+                if not os.path.isdir(device_link):
+                    raise RuntimeError("no pci device")
+                link = {}
+                link_dir = os.path.join(device_link, "link")
+                if os.path.isdir(link_dir):
+                    for leaf in (
+                        "l0s_aspm",
+                        "l1_aspm",
+                        "l1_1_aspm",
+                        "l1_2_aspm",
+                        "l1_1_pcipm",
+                        "l1_2_pcipm",
+                    ):
+                        try:
+                            with open(os.path.join(link_dir, leaf), "r") as f:
+                                link[leaf] = f.read().strip()
+                        except FileNotFoundError:
+                            link[leaf] = None
+                try:
+                    with open(
+                        os.path.join(device_link, "power", "control"), "r"
+                    ) as f:
+                        power_control = f.read().strip()
+                except FileNotFoundError:
+                    power_control = None
+                value = {
+                    "device": device_link,
+                    "link": link,
+                    "power_control": power_control,
+                }
+            elif name == "driver_sysfs":
+                settings = _load_settings()
+                profile = DRIVER_PROFILES.get(settings.get("driver"), {})
+                values = {}
+                for path in profile.get("sysfs_power_fixes", []):
+                    try:
+                        with open(path, "r") as f:
+                            values[path] = f.read().strip()
+                    except FileNotFoundError:
+                        values[path] = None
+                value = values
+            elif name in (
+                "file_nm_conf",
+                "file_modprobe_conf",
+                "file_backend_conf",
+                "file_dispatcher",
+            ):
+                path = {
+                    "file_nm_conf": NM_CONF_PATH,
+                    "file_modprobe_conf": MODPROBE_CONF_PATH,
+                    "file_backend_conf": GENERIC_BACKEND_CONF,
+                    "file_dispatcher": DISPATCHER_PATH,
+                }[name]
+                try:
+                    with open(path, "r") as f:
+                        value = {"exists": True, "content": f.read()}
+                except FileNotFoundError:
+                    value = {"exists": False, "content": None}
+            elif name == "backend":
+                backend = None
+                try:
+                    backend = self._get_current_backend()
+                except Exception:
+                    backend = None
+                services = {}
+                for svc in ("iwd", "wpa_supplicant"):
+                    entry = {}
+                    for op in ("is-enabled", "is-active"):
+                        try:
+                            result = self._run_cmd(
+                                ["/usr/bin/systemctl", op, svc], timeout=3
+                            )
+                            entry[op] = (
+                                result.get("stdout", "").strip()
+                                if result.get("success")
+                                else ""
+                            )
+                        except Exception:
+                            entry[op] = ""
+                    services[svc] = entry
+                value = {"backend": backend, "services": services}
+            elif name.startswith("profile_"):
+                rest = name[len("profile_") :]
+                uuid, sep, key = rest.partition("_")
+                if not sep or not uuid or not key:
+                    raise RuntimeError(f"bad profile slot {name}")
+                result = self._run_cmd(
+                    [
+                        "/usr/bin/nmcli",
+                        "-t",
+                        "-f",
+                        key,
+                        "con",
+                        "show",
+                        "uuid",
+                        uuid,
+                    ]
+                )
+                if not result.get("success"):
+                    raise RuntimeError("nmcli read failed")
+                out = result.get("stdout", "")
+                current = (
+                    out.split(":", 1)[1].replace("\\", "").strip()
+                    if ":" in out
+                    else ""
+                )
+                value = {"uuid": uuid, "key": key, "value": current}
+            else:
+                raise RuntimeError(f"unknown snapshot slot {name}")
+        except Exception as e:
+            decky.logger.info(f"snapshot capture skipped for {name}: {e}")
+            return
+        snapshot[name] = value
+        try:
+            _save_snapshot(snapshot)
+        except Exception as e:
+            decky.logger.info(f"snapshot save failed for {name}: {e}")
+
+    def _restore_slot(self, name: str) -> str | None:
+        """Restore snapshot slot `name`.
+
+        Returns None on success, an error string on failure or on a missing
+        slot (the caller then falls back to the assumed default, logs, and
+        reports "fallback:<slot>"). Never throws. The "backend" slot is
+        diagnosis only: service state is never restored.
+        """
+        try:
+            snapshot = _load_snapshot()
+        except Exception as e:
+            return f"snapshot unreadable: {e}"
+        if not isinstance(snapshot, dict) or name not in snapshot:
+            return f"missing slot '{name}'"
+        slot = snapshot[name]
+        try:
+            if name == "sysctl":
+                if not isinstance(slot, dict):
+                    raise RuntimeError("bad sysctl slot")
+                for key, val in slot.items():
+                    result = self._run_cmd(
+                        ["/usr/bin/sysctl", "-w", f"{key}={val}"]
+                    )
+                    if not result.get("success"):
+                        raise RuntimeError(
+                            f"sysctl restore failed for {key}: "
+                            f"{result.get('stderr', '')}"
+                        )
+            elif name == "txqueuelen":
+                iface = self._get_wifi_interface()
+                if not iface:
+                    iface = slot.get("iface") if isinstance(slot, dict) else None
+                if not iface:
+                    raise RuntimeError("no wifi interface")
+                result = self._run_cmd(
+                    [
+                        "/usr/bin/ip",
+                        "link",
+                        "set",
+                        iface,
+                        "txqueuelen",
+                        slot["value"],
+                    ]
+                )
+                if not result.get("success"):
+                    raise RuntimeError(
+                        f"txqueuelen restore failed: {result.get('stderr', '')}"
+                    )
+            elif name == "qdisc":
+                iface = self._get_wifi_interface()
+                if not iface:
+                    iface = slot.get("iface") if isinstance(slot, dict) else None
+                if not iface:
+                    raise RuntimeError("no wifi interface")
+                output = slot.get("output", "") if isinstance(slot, dict) else ""
+                lines = [
+                    line for line in output.split("\n") if line.strip()
+                ]
+                if not lines or lines[0].split()[1:2] == ["noqueue"]:
+                    result = self._run_cmd(
+                        ["/usr/bin/tc", "qdisc", "del", "dev", iface, "root"]
+                    )
+                    if not result.get("success"):
+                        raise RuntimeError(
+                            "qdisc del failed: "
+                            f"{result.get('stderr', '')}"
+                        )
+                else:
+                    tokens = lines[0].split()
+                    if "root" not in tokens:
+                        raise RuntimeError("qdisc line has no root token")
+                    params = tokens[tokens.index("root") + 1 :]
+                    result = self._run_cmd(
+                        ["/usr/bin/tc", "qdisc", "replace", "dev", iface, "root"]
+                        + params
+                    )
+                    if not result.get("success"):
+                        raise RuntimeError(
+                            "qdisc replace failed: "
+                            f"{result.get('stderr', '')}"
+                        )
+            elif name == "power_save":
+                val = slot.get("value") if isinstance(slot, dict) else None
+                if val not in ("off", "on"):
+                    raise RuntimeError("iface was absent at capture")
+                iface = self._get_wifi_interface()
+                if not iface:
+                    raise RuntimeError("no wifi interface")
+                result = self._run_cmd(
+                    ["/usr/bin/iw", "dev", iface, "set", "power_save", val]
+                )
+                if not result.get("success"):
+                    raise RuntimeError(
+                        f"iw power_save restore failed: "
+                        f"{result.get('stderr', '')}"
+                    )
+            elif name == "pcie":
+                device = slot.get("device") if isinstance(slot, dict) else None
+                if not device:
+                    raise RuntimeError("bad pcie slot")
+                link = slot.get("link") or {}
+                for leaf, content in link.items():
+                    if content is None:
+                        continue
+                    with open(os.path.join(device, "link", leaf), "w") as f:
+                        f.write(content)
+                power_control = slot.get("power_control")
+                if power_control is not None:
+                    with open(
+                        os.path.join(device, "power", "control"), "w"
+                    ) as f:
+                        f.write(power_control)
+            elif name == "driver_sysfs":
+                if not isinstance(slot, dict):
+                    raise RuntimeError("bad driver_sysfs slot")
+                for path, content in slot.items():
+                    if content is None:
+                        continue
+                    with open(path, "w") as f:
+                        f.write(content)
+            elif name in (
+                "file_nm_conf",
+                "file_modprobe_conf",
+                "file_backend_conf",
+                "file_dispatcher",
+            ):
+                path = {
+                    "file_nm_conf": NM_CONF_PATH,
+                    "file_modprobe_conf": MODPROBE_CONF_PATH,
+                    "file_backend_conf": GENERIC_BACKEND_CONF,
+                    "file_dispatcher": DISPATCHER_PATH,
+                }[name]
+                if not isinstance(slot, dict):
+                    raise RuntimeError(f"bad {name} slot")
+                if slot.get("exists"):
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    with open(path, "w") as f:
+                        f.write(slot.get("content") or "")
+                    if name == "file_dispatcher":
+                        os.chmod(path, 0o755)
+                else:
+                    try:
+                        os.remove(path)
+                    except FileNotFoundError:
+                        pass
+            elif name == "backend":
+                return "backend service state is diagnosis only (never restored)"
+            elif name.startswith("profile_"):
+                if not isinstance(slot, dict):
+                    raise RuntimeError(f"bad {name} slot")
+                result = self._nmcli_modify(
+                    slot["uuid"], slot["key"], slot["value"]
+                )
+                if not result.get("success"):
+                    raise RuntimeError(
+                        f"nmcli restore failed: {result.get('stderr', '')}"
+                    )
+            else:
+                return f"missing slot '{name}'"
+        except Exception as e:
+            return f"restore failed for '{name}': {e}"
+        return None
 
     def _require_wifi(self) -> tuple:
         iface = self._get_wifi_interface()

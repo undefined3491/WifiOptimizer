@@ -15,6 +15,7 @@ import ast
 import io
 import json
 import os as _real_os
+import posixpath as _posixpath
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -183,6 +184,11 @@ class RestorationFixture:
         self.chmod_calls = []
         self.write_counts = {}
         self.template_text = TEMPLATE.read_text(encoding="utf-8")
+        # Emulated device paths always use POSIX separators (production runs
+        # on Linux; ntpath joins would never match real main.py path logic).
+        self.posix_template = _posixpath.join(
+            "/tmp/wifi-optimizer-test", "defaults", "dispatcher.sh.tmpl"
+        )
 
         tree = ast.parse(SOURCE.read_text(encoding="utf-8"), filename=str(SOURCE))
         plugin = next(
@@ -244,7 +250,7 @@ class RestorationFixture:
         def _stub_open(path, mode="r", *args, **kwargs):
             p = str(path)
             if "r" in mode and "+" not in mode:
-                if p == str(TEMPLATE):
+                if p == str(TEMPLATE) or p == fixture.posix_template:
                     return io.StringIO(fixture.template_text)
                 if p in fixture.fs:
                     return io.StringIO(fixture.fs[p])
@@ -307,9 +313,9 @@ class RestorationFixture:
             path=SimpleNamespace(
                 isfile=_isfile,
                 isdir=_isdir,
-                join=_real_os.path.join,
-                dirname=_real_os.path.dirname,
-                basename=_real_os.path.basename,
+                join=_posixpath.join,
+                dirname=_posixpath.dirname,
+                basename=_posixpath.basename,
                 realpath=_realpath,
             ),
             makedirs=_makedirs,
