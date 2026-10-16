@@ -26,4 +26,4 @@ Prior Optimize Safe use means the current device must not be described as an unt
 
 No new optimization, reset, installation, backend switch, rename deployment or runtime test was performed to produce this record. Stage 0 and all audit findings remain open.
 
-Follow-up: the [2026-10-16 read-only device inventory](2026-10-16-owner-device-inventory.md) now records installed OS/build/kernel/driver, observed plugin file identity and configuration. It keeps the remaining runtime/version gaps and controlled validation separate from this original owner report.
+Follow-up: the [2026-10-16 read-only device inventory and runtime evidence](2026-10-16-owner-device-inventory.md) now record installed OS/build/kernel/driver, live Decky version, evidence of the active backend, observed plugin file identity and configuration. Controlled validation remains separate from this original owner report.
