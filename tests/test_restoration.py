@@ -919,8 +919,9 @@ class RestorationTests(unittest.IsolatedAsyncioTestCase):
     async def test_uninstall_restores_iw_and_removes(self):
         f = self.fixture()
         self.require_snapshot(f)
-        f.power_save_off = False
-        f.seed_settings(power_save_disabled=True, driver="rtw88")
+        # Live power save already off: enable captures "off" as baseline.
+        f.power_save_off = True
+        f.seed_settings(power_save_disabled=False, driver="rtw88")
         self.assertTrue((await f.plugin.set_power_save(True))["success"])
         # Simulate later live drift: something turned power save back on.
         f.power_save_off = False

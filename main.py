@@ -992,21 +992,99 @@ class Plugin:
     async def _uninstall(self):
         try:
             decky.logger.info("WiFi Optimizer TMS uninstalling")
-            self._remove_dispatcher()
-            self._apply_driver_fixes(False)
-            self._apply_pcie_aspm_fix(False)
-            for key, value in SYSCTL_DEFAULTS.items():
-                self._run_cmd(["/usr/bin/sysctl", "-w", f"{key}={value}"])
+            errors = []
+            # Live-state restoration from the snapshot (same owned-only
+            # semantics as reset). File-backed state below is removed, so
+            # file slots are not restored. Service enablement is never
+            # restored: the backend slot is diagnosis only.
+            restore_err = None
+            try:
+                restore_err = self._restore_slot("sysctl")
+            except Exception as e:
+                restore_err = f"snapshot unavailable: {e}"
+            if restore_err is not None:
+                decky.logger.info(
+                    f"snapshot restore fallback for sysctl: {restore_err}"
+                )
+                errors.append("fallback:sysctl")
+                for key, value in SYSCTL_DEFAULTS.items():
+                    self._run_cmd(["/usr/bin/sysctl", "-w", f"{key}={value}"])
             iface = self._get_wifi_interface()
             if iface:
-                self._run_cmd(["/usr/bin/ip", "link", "set", iface, "txqueuelen", "1000"])
-                self._run_cmd(["/usr/bin/tc", "qdisc", "del", "dev", iface, "root"])
+                # Ordered restore: qdisc before txqueuelen.
+                try:
+                    restore_err = self._restore_slot("qdisc")
+                except Exception as e:
+                    restore_err = f"snapshot unavailable: {e}"
+                if restore_err is not None:
+                    decky.logger.info(
+                        f"snapshot restore fallback for qdisc: {restore_err}"
+                    )
+                    errors.append("fallback:qdisc")
+                    self._run_cmd(
+                        ["/usr/bin/tc", "qdisc", "del", "dev", iface, "root"]
+                    )
+                try:
+                    restore_err = self._restore_slot("txqueuelen")
+                except Exception as e:
+                    restore_err = f"snapshot unavailable: {e}"
+                if restore_err is not None:
+                    decky.logger.info(
+                        "snapshot restore fallback for txqueuelen: "
+                        f"{restore_err}"
+                    )
+                    errors.append("fallback:txqueuelen")
+                    self._run_cmd(
+                        [
+                            "/usr/bin/ip",
+                            "link",
+                            "set",
+                            iface,
+                            "txqueuelen",
+                            "1000",
+                        ]
+                    )
+                try:
+                    restore_err = self._restore_slot("power_save")
+                except Exception as e:
+                    restore_err = f"snapshot unavailable: {e}"
+                if restore_err is not None:
+                    decky.logger.info(
+                        "snapshot restore fallback for power_save: "
+                        f"{restore_err}"
+                    )
+                    errors.append("fallback:power_save")
+            try:
+                restore_err = self._restore_slot("driver_sysfs")
+            except Exception as e:
+                restore_err = f"snapshot unavailable: {e}"
+            if restore_err is not None:
+                decky.logger.info(
+                    f"snapshot restore fallback for driver_sysfs: {restore_err}"
+                )
+                errors.append("fallback:driver_sysfs")
+                self._apply_driver_fixes(False)
+            try:
+                restore_err = self._restore_slot("pcie")
+            except Exception as e:
+                restore_err = f"snapshot unavailable: {e}"
+            if restore_err is not None:
+                decky.logger.info(
+                    f"snapshot restore fallback for pcie: {restore_err}"
+                )
+                errors.append("fallback:pcie")
+                self._apply_pcie_aspm_fix(False)
+            self._remove_dispatcher()
             for path in [NM_CONF_PATH, MODPROBE_CONF_PATH, GENERIC_BACKEND_CONF,
-                         SETTINGS_FILE, ENFORCED_FILE]:
+                         SETTINGS_FILE, ENFORCED_FILE, SNAPSHOT_FILE]:
                 try:
                     os.remove(path)
                 except FileNotFoundError:
                     pass
+            if errors:
+                decky.logger.info(
+                    "uninstall restore notes: " + "; ".join(errors)
+                )
         except Exception as e:
             decky.logger.error(f"_uninstall error: {e}")
 
@@ -2638,41 +2716,184 @@ class Plugin:
             return self._unexpected_response(e)
 
     async def reset_settings(self) -> dict:
-        """Delete settings and revert to defaults."""
+        """Reconcile live state, NM files, dispatcher and owned profiles to
+        the saved defaults (option R1): what the fresh settings declare
+        (power_save_disabled=True, auto_fix_on_wake=True, rest False/empty)
+        is what gets applied. Backend scope is out: GENERIC_BACKEND_CONF,
+        service states and 99-valve-wifi-backend.conf are untouched."""
         try:
-            # Revert runtime state
-            self._apply_driver_fixes(False)
-            self._apply_pcie_aspm_fix(False)
-            for key, value in SYSCTL_DEFAULTS.items():
-                self._run_cmd(["/usr/bin/sysctl", "-w", f"{key}={value}"])
+            errors = []
+            settings = _load_settings()
+            # Owner UUIDs are read before wiping settings.json.
+            owners = {
+                "bssid": settings.get("bssid_lock_connection_uuid") or "",
+                "band": settings.get("band_owner_uuid") or "",
+                "dns": settings.get("dns_owner_uuid") or "",
+                "ipv6": settings.get("ipv6_owner_uuid") or "",
+            }
+
+            # (a) Volatile/system domains restored from snapshot; each
+            # missing or failed slot falls back to the assumed default.
+            restore_err = None
+            try:
+                restore_err = self._restore_slot("sysctl")
+            except Exception as e:
+                restore_err = f"snapshot unavailable: {e}"
+            if restore_err is not None:
+                decky.logger.info(
+                    f"snapshot restore fallback for sysctl: {restore_err}"
+                )
+                errors.append("fallback:sysctl")
+                for key, value in SYSCTL_DEFAULTS.items():
+                    result = self._run_cmd(
+                        ["/usr/bin/sysctl", "-w", f"{key}={value}"]
+                    )
+                    if not result["success"]:
+                        decky.logger.error(
+                            f"sysctl {key}={value} failed: {result['stderr']}"
+                        )
+
             iface = self._get_wifi_interface()
             if iface:
-                self._run_cmd(["/usr/bin/ip", "link", "set", iface, "txqueuelen", "1000"])
-                self._run_cmd(["/usr/bin/tc", "qdisc", "del", "dev", iface, "root"])
+                # Ordered restore: qdisc before txqueuelen (mirrors apply).
+                try:
+                    restore_err = self._restore_slot("qdisc")
+                except Exception as e:
+                    restore_err = f"snapshot unavailable: {e}"
+                if restore_err is not None:
+                    decky.logger.info(
+                        f"snapshot restore fallback for qdisc: {restore_err}"
+                    )
+                    errors.append("fallback:qdisc")
+                    self._run_cmd(
+                        ["/usr/bin/tc", "qdisc", "del", "dev", iface, "root"]
+                    )
+                try:
+                    restore_err = self._restore_slot("txqueuelen")
+                except Exception as e:
+                    restore_err = f"snapshot unavailable: {e}"
+                if restore_err is not None:
+                    decky.logger.info(
+                        "snapshot restore fallback for txqueuelen: "
+                        f"{restore_err}"
+                    )
+                    errors.append("fallback:txqueuelen")
+                    self._run_cmd(
+                        [
+                            "/usr/bin/ip",
+                            "link",
+                            "set",
+                            iface,
+                            "txqueuelen",
+                            "1000",
+                        ]
+                    )
+            else:
+                decky.logger.info(
+                    "snapshot restore fallback for qdisc/txqueuelen: "
+                    "no wifi interface"
+                )
+                errors.append("fallback:qdisc")
+                errors.append("fallback:txqueuelen")
+
             try:
-                os.remove(NM_CONF_PATH)
-            except FileNotFoundError:
-                pass
+                restore_err = self._restore_slot("driver_sysfs")
+            except Exception as e:
+                restore_err = f"snapshot unavailable: {e}"
+            if restore_err is not None:
+                decky.logger.info(
+                    f"snapshot restore fallback for driver_sysfs: {restore_err}"
+                )
+                errors.append("fallback:driver_sysfs")
+                self._apply_driver_fixes(False)
+
             try:
-                os.remove(MODPROBE_CONF_PATH)
-            except FileNotFoundError:
-                pass
+                restore_err = self._restore_slot("file_modprobe_conf")
+            except Exception as e:
+                restore_err = f"snapshot unavailable: {e}"
+            if restore_err is not None:
+                decky.logger.info(
+                    "snapshot restore fallback for file_modprobe_conf: "
+                    f"{restore_err}"
+                )
+                errors.append("fallback:file_modprobe_conf")
+                try:
+                    os.remove(MODPROBE_CONF_PATH)
+                except FileNotFoundError:
+                    pass
+
             try:
-                os.remove(SETTINGS_FILE)
-            except FileNotFoundError:
-                pass
+                restore_err = self._restore_slot("pcie")
+            except Exception as e:
+                restore_err = f"snapshot unavailable: {e}"
+            if restore_err is not None:
+                decky.logger.info(
+                    f"snapshot restore fallback for pcie: {restore_err}"
+                )
+                errors.append("fallback:pcie")
+                self._apply_pcie_aspm_fix(False)
+
+            # (b) Converge live iw + NM conf to power_save_disabled=True.
+            if iface:
+                result = self._run_cmd(
+                    ["/usr/bin/iw", "dev", iface, "set", "power_save", "off"]
+                )
+                if not result["success"]:
+                    errors.append(f"iw_off_failed: {result.get('stderr', '')}")
+            try:
+                os.makedirs(os.path.dirname(NM_CONF_PATH), exist_ok=True)
+                with open(NM_CONF_PATH, "w") as f:
+                    f.write("[connection]\nwifi.powersave = 2\n")
+            except Exception as e:
+                errors.append(f"nm_conf_write_failed: {e}")
+
+            # (c) Converge dispatcher to auto_fix_on_wake=True.
+            try:
+                self._capture_slot("file_dispatcher")
+            except Exception as e:
+                decky.logger.info(
+                    f"snapshot capture skipped for file_dispatcher: {e}"
+                )
+            self._install_dispatcher()
+            if not os.path.isfile(DISPATCHER_PATH):
+                errors.append("dispatcher_install_failed")
+
+            # (d) Per-profile cleanup before wiping settings.json: clear
+            # exactly each known owner's keys, then a single conditional
+            # reconnect. Failures land in errors, never throw.
+            active_uuid = self._get_active_connection_uuid()
+            reconnect_needed = False
+            for uuid, clears in (
+                (owners["bssid"], [("802-11-wireless.bssid", "")]),
+                (owners["band"], [("802-11-wireless.band", "")]),
+                (
+                    owners["dns"],
+                    [("ipv4.dns", ""), ("ipv4.ignore-auto-dns", "no")],
+                ),
+                (owners["ipv6"], [("ipv6.method", "auto")]),
+            ):
+                if not uuid:
+                    continue
+                for key, value in clears:
+                    result = self._nmcli_modify(uuid, key, value)
+                    if not result["success"]:
+                        errors.append(f"{key}: {result.get('stderr', '')}")
+                if active_uuid and uuid == active_uuid:
+                    reconnect_needed = True
+            if reconnect_needed:
+                try:
+                    self._hard_reconnect(active_uuid)
+                except Exception as e:
+                    errors.append(f"reconnect_failed: {e}")
+
             try:
                 os.remove(ENFORCED_FILE)
             except FileNotFoundError:
                 pass
-            try:
-                os.remove(GENERIC_BACKEND_CONF)
-            except FileNotFoundError:
-                pass
 
-            # Repopulate model/driver so the plugin doesn't show as "UNKNOWN /
-            # Unsupported device" until the next plugin reload. Mirrors the
-            # hardware detection _main does on startup.
+            # (e) Repopulate model/driver so the plugin doesn't show as
+            # "UNKNOWN / Unsupported device" until the next plugin reload.
+            # Mirrors the hardware detection _main does on startup.
             info = await self.get_device_info()
             fresh = dict(DEFAULT_SETTINGS)
             fresh["model"] = info.get("model", "unknown")
@@ -2684,10 +2905,15 @@ class Plugin:
             distro = self._detect_distro()
             fresh["distro_id"] = distro["id"]
             fresh["distro_name"] = distro["name"]
+            fresh["last_applied"] = int(time.time())
             _save_settings(fresh)
 
             decky.logger.info("Settings reset to defaults")
-            return {"success": True, "message": "Settings reset to defaults"}
+            return {
+                "success": True,
+                "message": "Settings reset to defaults",
+                "errors": errors,
+            }
         except Exception as e:
             decky.logger.error(f"reset_settings error: {e}")
             return self._unexpected_response(e)
