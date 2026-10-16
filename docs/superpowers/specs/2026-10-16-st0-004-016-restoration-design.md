@@ -34,7 +34,9 @@ and restart-result reporting are tracked there, not here.
 
 ## Canonical contract (binding names)
 
-Helpers (exact signatures, `main.py`):
+Helpers (exact names; `_load_snapshot`/`_save_snapshot` are module-level like the
+settings helpers, `_capture_slot`/`_restore_slot` are `Plugin` methods since they
+need `self._run_cmd`/iface — callers guard with `try/except`, never throw):
 
 - `_load_snapshot() -> dict` — read `SETTINGS_DIR/system_snapshot.json`, `{}` when absent/unparseable.
 - `_save_snapshot(data: dict) -> None` — atomic write (`.tmp` + `os.replace`).
