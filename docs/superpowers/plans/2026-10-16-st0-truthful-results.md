@@ -76,7 +76,7 @@
 - [ ] **Step 1: Verify red** Expected: FAIL on failed-write tests.
 - [ ] **Step 2a: Implement write checks** per D3 (idempotent-del exception included).
 - [ ] **Step 2b: Implement DNS rollback** per D4.
-- [ ] **Step 2c: Buffer 8-key check + reset success rule** per D6/D8.
+- [ ] **Step 2c: Buffer 8-key check + reset success rule** per D6/D8. Also update pinned `tests/test_restoration.py` reset asserts: clean reset (empty `errors`) stays `success: True`; fallback reset (non-empty `errors`) becomes `success: False`.
 - [ ] **Step 3: Run** `python -m unittest tests.test_truthful_results -v` Expected: PASS.
 - [ ] **Step 4: Run full suite + syntax** `python -m unittest discover -s tests`; preflight `bash --version`; `python -m py_compile main.py`.
 - [ ] **Step 5: Commit** `git add main.py tests/test_truthful_results.py; git commit -m "fix: failed writes block intent with named errors (ST0-008)"`
@@ -84,14 +84,17 @@
 ### Task 4: Frontend result consumption (D7)
 
 **Files:**
-- Modify: `src/index.tsx`, `src/components/PanelFooter.tsx`, `src/components/ActionsSection.tsx` (only as needed for error display)
-- Test: typecheck + build + review (no frontend unit infra in repo)
+- Modify: `src/index.tsx`, `src/types.ts` (PluginStatus: `unknown_owners`, stale/error state; ERROR_MESSAGES: new backend codes), `src/components/PanelFooter.tsx`, `src/components/ActionsSection.tsx` (only as needed for error display)
+- Test: typecheck + build + review checklist (no frontend unit infra in repo)
+
+**Render checklist (verify each by reading the code, not by build):**
+- every `handleToggle`-family path sets `errors[key]` on reject; Force-Reapply maps each failed child to its key + banner shows applied/total/failed (+`total==0` info); reset warning banner lists `errors[]`; update apply/check/channel surface resolved-`False` and rejections; diagnostics check both `success` flags; poll reject sets `backendSwitch.error` with controls locked; no-status shows error+retry; stale shows timestamped banner; `transfer_warnings`/`unknown_owners`/setter-`errors[]` appended to messages or bannered.
 
 **Interfaces:**
 - Consumes: Tasks 2-3 result shapes.
 - Produces: catch on all handlers, Force-Reapply child mapping + banner, reset/update/diagnostic checks, poll-reject recovery, status stale/error states, warnings rendering.
 
-- [ ] **Step 1: Implement handler catches + Force-Reapply mapping + reset/update/diagnostic checks** per D7.
+- [ ] **Step 1: Implement handler catches + Force-Reapply mapping + reset/update/channel/diagnostic checks** per D7 (exact error codes per spec D3: `sysctl_failed`, `txqueuelen_failed`, `qdisc_failed`, `dispatcher_failed`, `modprobe_failed`, `sysfs_failed`, `pcie_failed`, `nm_conf_failed`; existing `dns_partial`, `relock_failed`, `nmcli_failed`, `unknown_owner` unchanged; aggregate `success` rule per D2).
 - [ ] **Step 2: Implement status stale/error states + poll-reject recovery + warnings rendering** per D7.
 - [ ] **Step 3: Verify** `npm exec --yes --package=pnpm@9 -- pnpm exec tsc --noEmit --skipLibCheck` Expected: exit 0. Then `pnpm run build` (frozen lockfile install if needed, pnpm v9 only) Expected: exit 0. Confirm `dist/` diff only from this change.
 - [ ] **Step 4: Run full backend suite** `python -m unittest discover -s tests` Expected: green (frontend change must not break backend).

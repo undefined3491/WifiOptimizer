@@ -1,10 +1,9 @@
 # ST0-007/008 + 014/017/019 — Truthful mutation and reconnect results — design
 
 Date: 2026-10-16. Baseline: `42c7bb9` (= `24811a7` + ST0-004/016), version `0.11.6`.
-Scope: findings `ST0-007` (`docs/audits/2026-10-15-stage-0-findings.md:60-64`),
-`ST0-008` (`:66-70`), `ST0-014` (`:102-106`), `ST0-017` (`:118-122`),
-`ST0-019` (`:128-130`), plus the minimal poll-reject recovery of `ST0-013`
-(`:96-100`, reject path only — race/bounded-retry machinery excluded). Stage 0
+Scope: findings `ST0-007`, `ST0-008`, `ST0-014`, `ST0-017`, `ST0-019`,
+plus the minimal poll-reject recovery of `ST0-013` (reject path only — race and
+bounded-retry machinery excluded, coordinated with the delivery package). Stage 0
 stays open; no Stable, no version bump, no Watchdog. Backend effective-state
 (ST0-009) and the delivery transaction (001/002/003/018) are separate packages.
 
@@ -28,30 +27,43 @@ stays open; no Stable, no version bump, no Watchdog. Backend effective-state
 
 ## Decisions (binding)
 
-- **D1 — structured reconnect.** `_hard_reconnect(uuid) -> dict` with per-stage
-  `{ok, stderr}` for `radio_off`, `radio_on`, `activation` (`None` when no uuid),
-  plus `verified: bool` (`radio_on` ok + activation ok when requested + live
-  active UUID equals the requested uuid after a short poll of 1–3 tries) and
-  `active_uuid_after`. Never throws (`_run_cmd` never throws). A
-  `radio-on` failure after a successful `radio-off` is reported distinctly
-  (`radio_off_without_on`) since the radio may be dead.
-- **D2 — honest `reconnected`.** `reconnected: True` only when `verified` is true.
-  Otherwise `reconnected: False` plus an additive `reconnect` detail: skipped
-  (`{"skipped": "offline" | "foreign_owner"}` — never attempted) vs attempted
-  (stage results). Profile intent already written stays written: `success`
-  reflects the mutation, `reconnected` reflects the verification. Aggregates
-  (`optimize_safe`, `reapply_all`) compute top-level `reconnected` from children
-  (any verified) and set `did_reconnect` only when a child actually attempted;
-  no hardcoded `True`.
+- **D1 — structured reconnect.** `_hard_reconnect(uuid) -> dict` with exact shape:
+  `{"stages": {"radio_off": {"ok": bool, "stderr": str}, "radio_on": {...},
+  "activation": {...} | None when no uuid}, "verified": bool,
+  "active_uuid_after": str | None, "radio_off_without_on": bool}`.
+  `verified` = `radio_on` ok + activation ok when requested + live active UUID
+  equals the requested uuid after verification polling: up to 3 checks, 2s
+  command timeout each (status quantum), `asyncio.sleep(1)` between tries, total
+  budget ≤5s; timeout yields `verified: False`, never an error. Never throws
+  (`_run_cmd` never throws). A `radio-on` failure after a successful `radio-off`
+  sets `radio_off_without_on: True` since the radio may be dead. No radio
+  recovery attempts: report, don't mask (findings ask for recovery; this package
+  establishes truthful reporting first, recovery belongs to a follow-up).
+- **D2 — honest `reconnected` and aggregate `success`.** `reconnected: True`
+  only when `verified` is true. Otherwise `reconnected: False` plus an additive
+  `reconnect` detail with exact shape: skipped → `{"attempted": False,
+  "skipped": "offline" | "foreign_owner"}` (never attempted); attempted →
+  `{"attempted": True, "stages": {...}, "verified": bool,
+  "active_uuid_after": ...}` (stage dicts per D1). Profile intent already written
+  stays written: `success` reflects the mutation, `reconnected` reflects the
+  verification. Aggregates (`optimize_safe`, `reapply_all`): top-level `success`
+  is `False` when any child `success` is `False` (counts `applied/total` kept);
+  top-level `reconnected` is computed from children (any verified) and
+  `did_reconnect` is set only when a child actually attempted; no hardcoded `True`.
 - **D3 — failed writes block intent.** Generalized rule, new error codes:
   sysctl loop → `sysctl_failed`; txqueuelen (all sites) → `txqueuelen_failed`
-  without saving the queue owner's intent and without clearing its slot;
+  without saving that setting's intent flag and without clearing its snapshot
+  slot (settings without owner UUIDs still have intent flags — the rule covers
+  flags, owners where present, and slots);
   CAKE `del` → `qdisc_failed`, except idempotent del (`No such qdisc/file` in
   stderr counts as success); dispatcher install/remove → `dispatcher_failed`
   instead of `isfile`-success; modprobe/sysfs/PCIe → `modprobe_failed` /
   `sysfs_failed` / `pcie_failed` with `success: False` (today's silent
   `success: True` ends); NM-conf write → `nm_conf_failed`. Each returns `detail`
-  and preserves owner + prior intent for retry.
+  and preserves owner + prior intent for retry. Partial sysctl application
+  (first keys written, later key fails) needs no rollback: writes are
+  idempotent, retry re-applies all keys and converges; the failure names the
+  failing key in `detail`.
 - **D4 — paired-write atomicity (DNS).** On second-key failure, roll back the
   first key to its snapshot prior (else clear) before returning the existing
   `dns_partial` (enable) / `nmcli_failed` (disable); intent never saved on
@@ -74,12 +86,16 @@ stays open; no Stable, no version bump, no Watchdog. Backend effective-state
   into a warning banner and catches rejections; channel/update/diagnostic
   handlers check resolved `success` and catch rejections into visible errors;
   `PanelFooter` checks both diagnostic `success` flags before `done`/`saved`;
-  backend-poll reject clears `in_progress` and sets `errors.wifi_backend`
-  (ST0-013 reject path only); `refreshStatus` checks `s.success`, keeps last
-  known status with `statusError` + `stale` flag + timestamp, renders
-  error-with-retry when no status yet and a stale banner otherwise — never
-  `setStatus(errorObj)`; `transfer_warnings`, per-setter `errors[]` and
-  `unknown_owners` are appended/rendered (banner for unknown owners).
+  backend-poll reject clears `in_progress` but sets an additive
+  `backendSwitch.error` that keeps mutation controls disabled until the next
+  successful `getBackendSwitchStatus` reconciles (exclusion preserved per
+  ST0-003; no retry timers — retry machinery belongs to the delivery package);
+  `refreshStatus` checks `s.success`, keeps last known status with `statusError`
+  + `stale` flag + timestamp, renders error-with-retry when no status yet and a
+  stale banner otherwise — never `setStatus(errorObj)`; `transfer_warnings`,
+  per-setter `errors[]` and `unknown_owners` are appended/rendered (banner for
+  unknown owners). `handleChannelChange` gains result check + `catch` (no
+  busy-guard change — channel switches are serialization-exempt like today).
 - **D8 — result-shape compatibility.** Existing keys keep shapes; only additive
   keys appear (`reconnect` object, `errors` entries, `relock` object). One
   intentional value change: `reset_settings` returns `success: False` when its
