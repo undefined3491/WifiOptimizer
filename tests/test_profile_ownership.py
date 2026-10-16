@@ -35,6 +35,7 @@ ASSIGN_NAMES = {
     "DNS_PROVIDERS",
     "DISPATCHER_PATH",
     "ENFORCED_FILE",
+    "SYSCTL_PARAMS",
 }
 
 SOURCE = Path(__file__).resolve().parents[1] / "main.py"
@@ -246,6 +247,18 @@ class ProfileFixture:
 
     def _stub_hard_reconnect(self, uuid=None):
         self.reconnects.append(uuid)
+        # Mirrors the D1 success shape: reconnect attempted and verified.
+        stage = {"ok": True, "stderr": ""}
+        return {
+            "stages": {
+                "radio_off": dict(stage),
+                "radio_on": dict(stage),
+                "activation": dict(stage) if uuid else None,
+            },
+            "verified": True,
+            "active_uuid_after": uuid,
+            "radio_off_without_on": False,
+        }
 
     # ---- static source access ----
 

@@ -39,7 +39,24 @@ The baseline report recorded **14 Important and 9 Minor findings**, with **no Cr
   Independent review + scoped re-review clean. See the [design](../superpowers/specs/2026-10-16-st0-004-016-restoration-design.md)
   and [plan](../superpowers/plans/2026-10-16-st0-004-016-restoration.md).
   Corrected-candidate device validation remains pending.
-- The other **9 Important and 9 Minor findings remain open**. Stage 0 and first Stable remain gated on their resolution/disposition and candidate-specific device evidence.
+- **ST0-007/008/014/017/019 (+013 reject path): corrected in source, isolated
+  regression verified (this branch).** `_hard_reconnect` returns per-stage results
+  with `verified` (≤2 checks, ≈5s budget, dead-radio signal); `reconnected: True`
+  only when verified, aggregates computed from children (top `success: False` on
+  any child failure); failed writes block intent with named errors
+  (`sysctl/txqueuelen/qdisc/dispatcher/modprobe/sysfs/pcie/nm_conf_failed`,
+  idempotent-del exception, DNS rollback, 8-key buffer check, reset `success`
+  tied to `errors`); UI consumes all results (catches on every handler, child
+  mapping + counts banner, reset/update/diagnostic checks, warnings rendering,
+  `backendSwitch.error` with preserved exclusion, last-known + stale labeling —
+  backend errors never shown as disconnected). Seventeen isolated tests
+  (red→green) in `tests/test_truthful_results.py`; full suite 89 tests OK
+  (3 Windows inventory skips, Git Bash on PATH); `tsc --skipLibCheck` and
+  `pnpm run build` clean with rebuilt tracked `dist`. Independent review +
+  scoped re-review clean. See the [design](../superpowers/specs/2026-10-16-st0-truthful-results-design.md)
+  and [plan](../superpowers/plans/2026-10-16-st0-truthful-results.md).
+  Corrected-candidate device validation remains pending.
+- The other **7 Important and 6 Minor findings remain open**. Stage 0 and first Stable remain gated on their resolution/disposition and candidate-specific device evidence.
 
 ## Coverage and evidence
 
