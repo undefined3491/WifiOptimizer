@@ -25,3 +25,5 @@ Prior Optimize Safe use means the current device must not be described as an unt
 3. On a reviewed, corrected candidate, compare individual options under repeatable conditions before evaluating a combined preset. Record useful outcomes for the owner's workload (for example loss, latency variation, disconnects or streaming stutter) and inconclusive/no-benefit results.
 
 No new optimization, reset, installation, backend switch, rename deployment or runtime test was performed to produce this record. Stage 0 and all audit findings remain open.
+
+Follow-up: the [2026-10-16 read-only device inventory](2026-10-16-owner-device-inventory.md) now records installed OS/build/kernel/driver, observed plugin file identity and configuration. It keeps the remaining runtime/version gaps and controlled validation separate from this original owner report.

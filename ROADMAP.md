@@ -1,19 +1,19 @@
 # Roadmap
 
-Updated: 2026-10-15. Statuses describe work completed in this fork, not upstream feature claims. No delivery dates are promised.
+Updated: 2026-10-16. Statuses describe work completed in this fork, not upstream feature claims. No delivery dates are promised.
 
 The fork's next product goal is to make a loss of connectivity visible during gameplay without opening the Decky Quick Access Menu. Establish a reviewed and tested foundation before adding that monitoring.
 
 ## Stage 0 — Audit and establish a baseline
 
-**Status: In progress — static review completed; 14 Important and 9 Minor findings remain open, with fixes and device validation pending.** See the [consolidated report](docs/audits/2026-10-15-stage-0-findings.md). Static completion does not close Stage 0.
+**Status: In progress — static review and initial read-only device inventory completed; 14 Important and 9 Minor findings remain open, with fixes and candidate validation pending.** See the [consolidated report](docs/audits/2026-10-15-stage-0-findings.md) and [existing-installation inventory](docs/testing/results/2026-10-16-owner-device-inventory.md). Observation does not close Stage 0.
 
 - Review the inherited Python backend, shell installer/dispatcher and React frontend, including privileged writes, error handling, reconnects, update/install recovery, reset and uninstall.
 - Reassess every optimization against current SteamOS, drivers and measured behavior. Record a decision to retain, constrain, change or remove it, with evidence and tradeoffs.
-- Compare the unmodified device baseline with individual optimizations on the owner's **Steam Deck LCD / SteamOS Stable**. Record exact OS, kernel, driver and Decky versions. Beta testing is an optional later compatibility exercise.
+- Establish a documented reference state and compare individual optimizations on the owner's **Steam Deck LCD / SteamOS Stable**. The existing device was already modified; its pre-plugin baseline is unknown. OS/build/kernel/driver are now recorded; running Decky version, effective backend and comparison/recovery conditions still need evidence. Beta testing is an optional later compatibility exercise.
 - Correct unsupported claims about universal benefit, battery cost and hardware coverage. Add regression tests for confirmed defects as fixes are made.
 - Establish the owner-selected `WiFi Optimizer TMS` / `wifi-optimizer-tms` identity before the first fork Stable release. The [rename design](docs/superpowers/specs/2026-10-15-tms-identity-design.md) proposes preserving installation/settings paths and coordinating GitHub cutover with corrected installation/update flows; implementation and device evidence are pending.
-- Prepare the [read-only device inventory](docs/testing/collect-inventory.md) and review the [first recovery package](docs/superpowers/specs/2026-10-15-delivery-recovery-design.md) for installation/update findings. The recovery engine and networking fixes remain pending; preparation does not close findings.
+- Retain the [read-only device inventory](docs/testing/results/2026-10-16-owner-device-inventory.md), resolve its evidence gaps and review the [first recovery package](docs/superpowers/specs/2026-10-15-delivery-recovery-design.md) for installation/update findings. The recovery engine and networking fixes remain pending; inventory does not close findings.
 
 The first Stable release of this fork and implementation of Connection Watchdog follow Stage 0. Close this stage only after the audit covers the selected commit, all Critical/Important findings are fixed and reviewed, device results are recorded for the release candidate, and a remaining-limitations list supports the claimed hardware/OS coverage. Repeat affected checks if subsequent changes invalidate that evidence.
 
