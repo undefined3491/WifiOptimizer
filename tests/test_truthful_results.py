@@ -878,6 +878,48 @@ class TruthfulResultsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.get("errors"), [])
         self.assertTrue(result["success"])
 
+    async def test_reset_reports_unverified_reconnect(self):
+        # Owned profile on the active UUID forces the conditional reconnect;
+        # dead verification (no wifi back) must land in errors.
+        f = self.fixture(bssid_lock_connection_uuid=UUID_A)
+        f.nm_profiles[UUID_A] = {"802-11-wireless.bssid": "AA:BB:CC:DD:EE:FF"}
+        f.verify_sequence = [None, None]
+        result = await f.plugin.reset_settings()
+        errors = result.get("errors") or []
+        self.assertTrue(
+            any(str(e).startswith("reconnect_failed") for e in errors),
+            f"expected reconnect_failed in {errors}",
+        )
+
+    async def test_reset_silent_on_verified_reconnect(self):
+        # Same setup with wifi coming back: verified, no reconnect entry.
+        f = self.fixture(bssid_lock_connection_uuid=UUID_A)
+        f.nm_profiles[UUID_A] = {"802-11-wireless.bssid": "AA:BB:CC:DD:EE:FF"}
+        result = await f.plugin.reset_settings()
+        errors = result.get("errors") or []
+        self.assertFalse(
+            any(str(e).startswith("reconnect_failed") for e in errors),
+            f"unexpected reconnect_failed in {errors}",
+        )
+
+    def test_clear_owned_profiles_reconnect_reporting(self):
+        # Direct helper check (shared by reset_settings and _uninstall).
+        f = self.fixture()
+        f.verify_sequence = [None, None]
+        errors = []
+        f.plugin._clear_owned_profiles({"bssid": UUID_A}, UUID_A, errors)
+        self.assertTrue(
+            any(str(e).startswith("reconnect_failed") for e in errors),
+            f"expected reconnect_failed in {errors}",
+        )
+        g = self.fixture()
+        g_errors = []
+        g.plugin._clear_owned_profiles({"bssid": UUID_A}, UUID_A, g_errors)
+        self.assertFalse(
+            any(str(e).startswith("reconnect_failed") for e in g_errors),
+            f"unexpected reconnect_failed in {g_errors}",
+        )
+
     def test_priority_never_written_truthful(self):
         hits = []
         for lineno, line in enumerate(

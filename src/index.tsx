@@ -446,6 +446,31 @@ function Content() {
         }
         setErrors(newErrors);
       }
+      // Lossless results (mirrors handleToggle/handleForceReapply):
+      // transfer warnings, per-setter errors[] and an unverified
+      // reconnect are bannered, never dropped.
+      const optWarnings: string[] = [];
+      for (const v of Object.values(result.results ?? {})) {
+        if (v.transfer_warnings) optWarnings.push(...v.transfer_warnings);
+        if (v.errors) optWarnings.push(...v.errors);
+      }
+      const optFailedStages: string[] = [];
+      let optUnverified = false;
+      for (const v of Object.values(result.results ?? {})) {
+        const rc = v.reconnect;
+        if (rc?.attempted && !rc.verified) {
+          optUnverified = true;
+          for (const [name, st] of Object.entries(rc.stages ?? {})) {
+            if (st && !st.ok) optFailedStages.push(name);
+          }
+        }
+      }
+      if (optUnverified) {
+        optWarnings.push(
+          `WiFi reconnect not verified${optFailedStages.length ? ` (${optFailedStages.join(", ")})` : ""}. Settings were saved; toggle WiFi off/on if needed.`
+        );
+      }
+      if (optWarnings.length) setActionWarnings(optWarnings);
       // optimize_safe contains BSSID lock which reconnects
       if (result.reconnected) {
         await new Promise((r) => setTimeout(r, RECONNECT_DELAY));
@@ -492,6 +517,22 @@ function Content() {
       for (const v of Object.values(result.results ?? {})) {
         if (v.transfer_warnings) warnings.push(...v.transfer_warnings);
         if (v.errors) warnings.push(...v.errors);
+      }
+      const failedStages: string[] = [];
+      let anyUnverified = false;
+      for (const v of Object.values(result.results ?? {})) {
+        const rc = v.reconnect;
+        if (rc?.attempted && !rc.verified) {
+          anyUnverified = true;
+          for (const [name, st] of Object.entries(rc.stages ?? {})) {
+            if (st && !st.ok) failedStages.push(name);
+          }
+        }
+      }
+      if (anyUnverified) {
+        warnings.push(
+          `WiFi reconnect not verified${failedStages.length ? ` (${failedStages.join(", ")})` : ""}. Settings were saved; toggle WiFi off/on if needed.`
+        );
       }
       if (warnings.length) setActionWarnings(warnings);
       if (result.reconnected) {
@@ -770,7 +811,7 @@ function Content() {
       )}
 
       {/* Settings that lost track of their network profile */}
-      {connected && unknownOwners.length > 0 && (
+      {unknownOwners.length > 0 && (
         <Banner variant="warning" icon="⚠">
           {unknownOwners.length} setting{unknownOwners.length > 1 ? "s" : ""}{" "}
           lost track of {unknownOwners.length > 1 ? "their" : "its"} network

@@ -1459,9 +1459,22 @@ class Plugin:
                 reconnect_needed = True
         if reconnect_needed:
             try:
-                self._hard_reconnect(active_uuid)
+                rc = self._hard_reconnect(active_uuid) or {}
             except Exception as e:
                 errors.append(f"reconnect_failed: {e}")
+            else:
+                # _hard_reconnect never throws: an attempted but unverified
+                # reconnect (dead radio, failed activation, no wifi back)
+                # must land in errors, not vanish silently.
+                if not rc.get("verified"):
+                    stages = rc.get("stages") or {}
+                    failed = [
+                        name
+                        for name, st in stages.items()
+                        if st is not None and not st.get("ok")
+                    ]
+                    stage = ",".join(failed) if failed else "unverified"
+                    errors.append(f"reconnect_failed:{stage}")
 
     # ---- Diagnostics ----
 

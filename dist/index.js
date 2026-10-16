@@ -884,6 +884,33 @@ function Content() {
                 }
                 setErrors(newErrors);
             }
+            // Lossless results (mirrors handleToggle/handleForceReapply):
+            // transfer warnings, per-setter errors[] and an unverified
+            // reconnect are bannered, never dropped.
+            const optWarnings = [];
+            for (const v of Object.values(result.results ?? {})) {
+                if (v.transfer_warnings)
+                    optWarnings.push(...v.transfer_warnings);
+                if (v.errors)
+                    optWarnings.push(...v.errors);
+            }
+            const optFailedStages = [];
+            let optUnverified = false;
+            for (const v of Object.values(result.results ?? {})) {
+                const rc = v.reconnect;
+                if (rc?.attempted && !rc.verified) {
+                    optUnverified = true;
+                    for (const [name, st] of Object.entries(rc.stages ?? {})) {
+                        if (st && !st.ok)
+                            optFailedStages.push(name);
+                    }
+                }
+            }
+            if (optUnverified) {
+                optWarnings.push(`WiFi reconnect not verified${optFailedStages.length ? ` (${optFailedStages.join(", ")})` : ""}. Settings were saved; toggle WiFi off/on if needed.`);
+            }
+            if (optWarnings.length)
+                setActionWarnings(optWarnings);
             // optimize_safe contains BSSID lock which reconnects
             if (result.reconnected) {
                 await new Promise((r) => setTimeout(r, RECONNECT_DELAY));
@@ -935,6 +962,21 @@ function Content() {
                     warnings.push(...v.transfer_warnings);
                 if (v.errors)
                     warnings.push(...v.errors);
+            }
+            const failedStages = [];
+            let anyUnverified = false;
+            for (const v of Object.values(result.results ?? {})) {
+                const rc = v.reconnect;
+                if (rc?.attempted && !rc.verified) {
+                    anyUnverified = true;
+                    for (const [name, st] of Object.entries(rc.stages ?? {})) {
+                        if (st && !st.ok)
+                            failedStages.push(name);
+                    }
+                }
+            }
+            if (anyUnverified) {
+                warnings.push(`WiFi reconnect not verified${failedStages.length ? ` (${failedStages.join(", ")})` : ""}. Settings were saved; toggle WiFi off/on if needed.`);
             }
             if (warnings.length)
                 setActionWarnings(warnings);
@@ -1109,7 +1151,7 @@ function Content() {
                     ? `${s?.device_label} - ${s?.chip_label}`
                     : s?.chip_label && s.chip_label !== "unknown"
                         ? s.chip_label
-                        : undefined }), supportTier === 3 && (SP_JSX.jsx(Banner, { variant: "info", children: "Unknown WiFi hardware detected. Some optimizations may not apply." })), updateInfo?.update_available && !updating && (SP_JSX.jsx(DFL.PanelSection, { children: SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs(DFL.ButtonItem, { layout: "below", onClick: handleApplyUpdate, children: ["Update to v", updateInfo.latest_version] }) }) })), updating && (SP_JSX.jsx(DFL.PanelSection, { children: SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: theme.fontSize.body, color: theme.info.text }, children: "Updating... plugin will restart momentarily." }) }) })), connected && !s?.last_applied && (SP_JSX.jsxs(Banner, { variant: "info", children: ["Tap ", SP_JSX.jsx("strong", { children: "Optimize Safe" }), " to get started."] })), connected && !!s?.last_applied && driftCount > 0 && (SP_JSX.jsxs(Banner, { variant: "warning", icon: "\u26A0", children: [driftCount, " setting", driftCount > 1 ? "s" : "", " drifted after wake.", " ", SP_JSX.jsx("span", { style: { textDecoration: "underline", cursor: "pointer" }, onClick: handleOptimize, children: "Fix now" })] })), !connected && (SP_JSX.jsx(Banner, { variant: "error", icon: "\u2715", children: "Not connected to WiFi. Connect first, then optimize." })), actionError && (SP_JSX.jsx(Banner, { variant: "error", icon: "\u2715", children: actionError })), actionWarnings && actionWarnings.length > 0 && (SP_JSX.jsx(Banner, { variant: "warning", icon: "\u26A0", children: actionWarnings.map((w, i) => (SP_JSX.jsxs("span", { children: [w, i < actionWarnings.length - 1 && SP_JSX.jsx("br", {})] }, i))) })), connected && unknownOwners.length > 0 && (SP_JSX.jsxs(Banner, { variant: "warning", icon: "\u26A0", children: [unknownOwners.length, " setting", unknownOwners.length > 1 ? "s" : "", " ", "lost track of ", unknownOwners.length > 1 ? "their" : "its", " network (", unknownOwners.join(", "), "). Re-apply on the desired network."] })), isStale && (SP_JSX.jsxs(Banner, { variant: "warning", icon: "\u26A0", children: ["Showing last known status", statusAt ? ` from ${new Date(statusAt).toLocaleTimeString()}` : "", " ", "\u2014 refresh failed", statusError ? `: ${statusError}` : "", ".", " ", SP_JSX.jsx("span", { style: { textDecoration: "underline", cursor: "pointer" }, onClick: () => refreshStatus(true), children: "Retry now" })] })), backendSwitch && !backendSwitch.in_progress && backendSwitch.result && (() => {
+                        : undefined }), supportTier === 3 && (SP_JSX.jsx(Banner, { variant: "info", children: "Unknown WiFi hardware detected. Some optimizations may not apply." })), updateInfo?.update_available && !updating && (SP_JSX.jsx(DFL.PanelSection, { children: SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs(DFL.ButtonItem, { layout: "below", onClick: handleApplyUpdate, children: ["Update to v", updateInfo.latest_version] }) }) })), updating && (SP_JSX.jsx(DFL.PanelSection, { children: SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: theme.fontSize.body, color: theme.info.text }, children: "Updating... plugin will restart momentarily." }) }) })), connected && !s?.last_applied && (SP_JSX.jsxs(Banner, { variant: "info", children: ["Tap ", SP_JSX.jsx("strong", { children: "Optimize Safe" }), " to get started."] })), connected && !!s?.last_applied && driftCount > 0 && (SP_JSX.jsxs(Banner, { variant: "warning", icon: "\u26A0", children: [driftCount, " setting", driftCount > 1 ? "s" : "", " drifted after wake.", " ", SP_JSX.jsx("span", { style: { textDecoration: "underline", cursor: "pointer" }, onClick: handleOptimize, children: "Fix now" })] })), !connected && (SP_JSX.jsx(Banner, { variant: "error", icon: "\u2715", children: "Not connected to WiFi. Connect first, then optimize." })), actionError && (SP_JSX.jsx(Banner, { variant: "error", icon: "\u2715", children: actionError })), actionWarnings && actionWarnings.length > 0 && (SP_JSX.jsx(Banner, { variant: "warning", icon: "\u26A0", children: actionWarnings.map((w, i) => (SP_JSX.jsxs("span", { children: [w, i < actionWarnings.length - 1 && SP_JSX.jsx("br", {})] }, i))) })), unknownOwners.length > 0 && (SP_JSX.jsxs(Banner, { variant: "warning", icon: "\u26A0", children: [unknownOwners.length, " setting", unknownOwners.length > 1 ? "s" : "", " ", "lost track of ", unknownOwners.length > 1 ? "their" : "its", " network (", unknownOwners.join(", "), "). Re-apply on the desired network."] })), isStale && (SP_JSX.jsxs(Banner, { variant: "warning", icon: "\u26A0", children: ["Showing last known status", statusAt ? ` from ${new Date(statusAt).toLocaleTimeString()}` : "", " ", "\u2014 refresh failed", statusError ? `: ${statusError}` : "", ".", " ", SP_JSX.jsx("span", { style: { textDecoration: "underline", cursor: "pointer" }, onClick: () => refreshStatus(true), children: "Retry now" })] })), backendSwitch && !backendSwitch.in_progress && backendSwitch.result && (() => {
                 const r = backendSwitch.result;
                 // Treat reconnect timeout as a warning even when the backend-level
                 // switch succeeded - the system is switched but WiFi didn't come back.
