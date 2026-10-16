@@ -29,12 +29,13 @@
 ### Task 1: Copy fixes (D1/D2)
 
 **Files:**
-- Modify: `src/index.tsx` (band `InfoRow`, CAKE `explanation`), `README.md` (CAKE table row)
-- Test: grep + typecheck + build + review checklist (no frontend unit infra)
+- Modify: `src/index.tsx` (band `InfoRow` + delete unused `supports6GHz` const, CAKE `explanation`), `README.md` (CAKE table row + stale 6 GHz-claim notes)
+- Test: scoped grep + typecheck + build + verify-dist + review checklist (no frontend unit infra)
 
-- [ ] **Step 1: Implement** exact texts per D1/D2 (keep 2.4-GHz-only warning, reboot/reset semantics sentences).
-- [ ] **Step 2: Verify** grep: no `6 GHz` in band label/subtitle; no `another device` in CAKE copy/README. `tsc --noEmit --skipLibCheck` exit 0. `pnpm run build` exit 0 (pnpm v9, frozen lockfile). Read the render checklist: label/subtitle/explanation/badge props intact.
-- [ ] **Step 3: Commit** `git add src/index.tsx README.md dist/index.js dist/index.js.map; git commit -m "fix: truthful band and CAKE copy (ST0-021/022)"` (include rebuilt `dist` only if the build output changed).
+- [ ] **Step 0: Install deps first** `npm exec --yes --package=pnpm@9 -- pnpm install --frozen-lockfile` (worktree has no `node_modules`; wrapper per AGENTS.md, no global pnpm change).
+- [ ] **Step 1: Implement** exact texts per D1/D2 (keep 2.4-GHz-only warning, Bluetooth/LCD sentences, reboot/reset semantics sentences).
+- [ ] **Step 2: Verify** scoped grep: band `InfoRow` block free of `6 GHz` in label/subtitle; no `another device` in CAKE copy/README. `tsc --noEmit --skipLibCheck` exit 0. `pnpm run build` exit 0. `snapshot` + `verify-dist` via `scripts/check_delivery.py` (dist must round-trip). Read the render checklist: label/subtitle/explanation/badge props intact, no unused locals.
+- [ ] **Step 3: Commit** build, then `git diff --stat dist/; git status --short`; commit `dist` iff non-empty: `git add src/index.tsx README.md [dist/index.js dist/index.js.map]; git commit -m "fix: truthful band and CAKE copy (ST0-021/022)"`.
 
 ### Task 2: Toolchain triage (D3)
 
@@ -56,5 +57,5 @@
 - Test: none (docs only)
 
 - [ ] **Step 1: Update findings** correction evidence for the three findings; remaining findings stay open; Stage 0 stays open.
-- [ ] **Step 2: Verify** via `git log --stat` (post-commit diff is empty by design).
+- [ ] **Step 2: Verify** via `git status --short` clean apart from intended files (post-commit diff is empty by design).
 - [ ] **Step 3: Commit** `git add docs/...; git commit -m "docs: ST0-021/022/023 correction evidence"`
