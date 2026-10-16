@@ -115,6 +115,15 @@ function Content() {
   const [applyingAll, setApplyingAll] = useState(false);
   const [optimizeResult, setOptimizeResult] = useState<OptimizeSafeResult | null>(null);
   const [customDnsInput, setCustomDnsInput] = useState("");
+  // Visible action outcomes: rejections land in actionError; transfer
+  // warnings, setter errors[] and reset errors[] land in actionWarnings.
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionWarnings, setActionWarnings] = useState<string[] | null>(null);
+  // Status fetch health: last known status is kept and labeled stale
+  // instead of being poisoned or presented as fresh.
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [isStale, setIsStale] = useState(false);
+  const [statusAt, setStatusAt] = useState<number>(0);
 
   // --- Update flow state ---
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
@@ -131,6 +140,7 @@ function Content() {
   const busyRef = useRef(false);
   const backendPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const prevConnectedRef = useRef<boolean | null>(null);
+  const statusRef = useRef<PluginStatus | null>(null);
   const lastUpdateCheckAtRef = useRef<number>(0);
 
   const setBusy = useCallback((val: boolean) => {
@@ -147,7 +157,16 @@ function Content() {
       return;
     }
     lastUpdateCheckAtRef.current = now;
-    backend.checkForUpdate().then(setUpdateInfo).catch(() => {});
+    backend.checkForUpdate().then((r) => {
+      setUpdateInfo(r);
+      if (r && !r.success) {
+        setUpdateError(r.message ?? "Couldn't check for updates.");
+      } else {
+        setUpdateError(null);
+      }
+    }).catch(() => {
+      setUpdateError("Couldn't check for updates.");
+    });
   }, []);
 
   const refreshStatus = useCallback(async (force: boolean = false) => {
@@ -157,14 +176,26 @@ function Content() {
     if (!force && busyRef.current) return;
     try {
       const s = await backend.getStatus();
-      setStatus(s);
-      if (s.settings) {
-        if (s.settings.dns_provider === "custom") {
-          setCustomDnsInput(s.settings.dns_servers || "");
+      if (s && s.success !== false) {
+        statusRef.current = s;
+        setStatus(s);
+        setStatusError(null);
+        setIsStale(false);
+        setStatusAt(Date.now());
+        if (s.settings) {
+          if (s.settings.dns_provider === "custom") {
+            setCustomDnsInput(s.settings.dns_servers || "");
+          }
         }
+      } else {
+        // Resolved failure: keep last known status, label it stale.
+        setStatusError(s?.message ?? "Couldn't load status.");
+        if (statusRef.current) setIsStale(true);
       }
     } catch (e) {
       console.error("WiFi Optimizer TMS: failed to get status", e);
+      setStatusError("Couldn't reach the plugin. It may still be loading.");
+      if (statusRef.current) setIsStale(true);
     }
   }, []);
 
@@ -205,6 +236,18 @@ function Content() {
         stopBackendPoll();
         setBusy(false);
         console.error("backend switch poll error", e);
+        // Poll rejection: clear in-flight state but keep mutation controls
+        // locked via an additive error until the next successful
+        // getBackendSwitchStatus reconciles (no retry timers).
+        setBackendSwitch((prev) => ({
+          success: false,
+          in_progress: false,
+          phase: "failed",
+          target: prev?.target ?? null,
+          started_at: prev?.started_at ?? 0,
+          result: prev?.result ?? null,
+          error: "Lost contact with the backend switch. Reopen the panel or start a new switch.",
+        }));
       }
     }, BACKEND_POLL_INTERVAL);
   }, [refreshStatus, setBusy]);
@@ -253,6 +296,9 @@ function Content() {
           setBackendSwitch(s);
           setBusy(true);
           beginBackendPoll();
+        } else {
+          // Reconcile a prior poll-reject lock once the backend answers.
+          setBackendSwitch((prev) => (prev?.error ? s : prev));
         }
       })
       .catch(() => {});
@@ -332,6 +378,8 @@ function Content() {
   const handleToggle = async (key: string, fn: () => Promise<MethodResult>) => {
     if (busyRef.current) return;
     setBusy(true);
+    setActionError(null);
+    setActionWarnings(null);
     setErrors((prev) => {
       const next = { ...prev };
       delete next[key];
@@ -346,10 +394,28 @@ function Content() {
         const msg = (result.message ?? ERROR_MESSAGES[result.error ?? ""] ?? "Unknown error") + detail;
         setErrors((prev) => ({ ...prev, [key]: msg }));
       }
+      // Lossless results: transfer warnings, per-setter errors[] and an
+      // unverified reconnect are bannered, never dropped.
+      const warnings: string[] = [];
+      if (result.transfer_warnings) warnings.push(...result.transfer_warnings);
+      if (result.errors) warnings.push(...result.errors);
+      const rc = result.reconnect;
+      if (rc?.attempted && !rc.verified) {
+        const failed = Object.entries(rc.stages ?? {})
+          .filter(([, st]) => st && !st.ok)
+          .map(([name]) => name);
+        warnings.push(
+          `WiFi reconnect not verified${failed.length ? ` (${failed.join(", ")})` : ""}. Settings were saved; toggle WiFi off/on if needed.`
+        );
+      }
+      if (warnings.length) setActionWarnings(warnings);
       // Wait for WiFi to reconnect before refreshing status
       if (result.reconnected) {
         await new Promise((r) => setTimeout(r, RECONNECT_DELAY));
       }
+    } catch (e) {
+      console.error(`WiFi Optimizer TMS: toggle ${key} failed`, e);
+      setErrors((prev) => ({ ...prev, [key]: "Request failed. Please try again." }));
     } finally {
       // Refresh before clearing busy so toggles/badges don't briefly flip to
       // stale pre-operation values in the interim render. Refresh runs even on
@@ -364,6 +430,8 @@ function Content() {
     setBusy(true);
     setApplyingAll(true);
     setErrors({});
+    setActionError(null);
+    setActionWarnings(null);
     setOptimizeResult(null);
     try {
       const result = await backend.optimizeSafe();
@@ -384,6 +452,7 @@ function Content() {
       }
     } catch (e) {
       console.error("optimize error", e);
+      setActionError("Couldn't apply optimizations. Please try again.");
     } finally {
       // Refresh before clearing applyingAll so button doesn't briefly flip to
       // "All good" from stale status. Refresh runs on errors too.
@@ -393,16 +462,70 @@ function Content() {
     }
   };
 
-  const handleForceReapply = () =>
-    handleToggle("reapply", () => backend.reapplyAll());
+  // Force Reapply has its own handler (not handleToggle): each failed
+  // child maps to its existing errors[child] key, the shared banner shows
+  // applied/total/failed, and total==0 renders as info. The old "reapply"
+  // error key is retired since no row renders it.
+  const handleForceReapply = async () => {
+    if (busyRef.current) return;
+    setBusy(true);
+    setActionError(null);
+    setActionWarnings(null);
+    setOptimizeResult(null);
+    try {
+      const result = await backend.reapplyAll();
+      setOptimizeResult(result);
+      const childKeys = Object.keys(result.results ?? {});
+      const newErrors: Record<string, string> = {};
+      for (const [k, v] of Object.entries(result.results ?? {})) {
+        if (!v.success) {
+          const det = v.detail ? ` (${v.detail})` : "";
+          newErrors[k] = (v.message ?? ERROR_MESSAGES[v.error ?? ""] ?? "Failed") + det;
+        }
+      }
+      setErrors((prev) => {
+        const next = { ...prev };
+        for (const k of childKeys) delete next[k];
+        return { ...next, ...newErrors };
+      });
+      const warnings: string[] = [];
+      for (const v of Object.values(result.results ?? {})) {
+        if (v.transfer_warnings) warnings.push(...v.transfer_warnings);
+        if (v.errors) warnings.push(...v.errors);
+      }
+      if (warnings.length) setActionWarnings(warnings);
+      if (result.reconnected) {
+        await new Promise((r) => setTimeout(r, RECONNECT_DELAY));
+      }
+    } catch (e) {
+      console.error("force reapply error", e);
+      setActionError("Force reapply failed. Please try again.");
+    } finally {
+      await refreshStatus(true);
+      setBusy(false);
+    }
+  };
 
   const handleResetSettings = async () => {
     if (busyRef.current) return;
     setBusy(true);
     setOptimizeResult(null);
     setErrors({});
+    setActionError(null);
+    setActionWarnings(null);
     try {
-      await backend.resetSettings();
+      const result = await backend.resetSettings();
+      const errs = result.errors ?? [];
+      if (errs.length) {
+        // Non-empty errors[] (possibly with success False) is a warning,
+        // not a rejection: defaults were applied with known gaps.
+        setActionWarnings([...errs]);
+      } else if (!result.success) {
+        setActionError(result.message ?? "Reset failed. Please try again.");
+      }
+    } catch (e) {
+      console.error("reset error", e);
+      setActionError("Reset failed. Please try again.");
     } finally {
       await refreshStatus(true);
       setBusy(false);
@@ -462,9 +585,20 @@ function Content() {
     setUpdateError(null);
     setUpdating(true);
     try {
-      await backend.applyUpdate();
+      const r = await backend.applyUpdate();
+      if (r && !r.success) {
+        setUpdating(false);
+        setUpdateError(r.message ?? "Update failed. Please try again.");
+      }
+      // On success plugin_loader restarts and kills the connection, which
+      // lands in the catch below; the safety-timeout effect covers a stall.
     } catch {
-      // plugin_loader restart killed the connection; expected
+      // A genuine pre-launch failure surfaces here. A restart-kill after a
+      // successful launch clears when the panel reloads.
+      setUpdating(false);
+      setUpdateError(
+        "Update failed. Try again, or reinstall manually from Konsole."
+      );
     }
   };
 
@@ -475,29 +609,65 @@ function Content() {
     try {
       const result = await backend.checkForUpdate();
       setUpdateInfo(result);
+      if (result && !result.success) {
+        setUpdateError(result.message ?? "Couldn't check for updates.");
+      }
     } catch {
-      // refreshStatus has its own catch; no need to log here
+      setUpdateError("Couldn't check for updates.");
     }
     setCheckingUpdate(false);
   };
 
   const handleChannelChange = async (nextChannel: string) => {
-    await backend.setUpdateChannel(nextChannel);
+    try {
+      const r = await backend.setUpdateChannel(nextChannel);
+      if (r && !r.success) {
+        setUpdateError(r.message ?? "Couldn't change update channel.");
+      } else {
+        setUpdateError(null);
+      }
+    } catch {
+      setUpdateError("Couldn't change update channel.");
+    }
     setUpdateInfo(null);
     await refreshStatus();
   };
 
-  // Don't render content until first status arrives (prevents disconnect flash)
+  // Don't render content until first status arrives (prevents disconnect flash).
+  // A failed first load renders an error with retry instead of hanging blank.
   if (!status) {
-    return <PanelSection title="WiFi Optimizer TMS" />;
+    return (
+      <>
+        <PanelSection title="WiFi Optimizer TMS" />
+        {statusError && (
+          <>
+            <Banner variant="error" icon="✕">
+              {statusError}
+            </Banner>
+            <PanelSection>
+              <PanelSectionRow>
+                <ButtonItem layout="below" onClick={() => refreshStatus(true)}>
+                  Retry
+                </ButtonItem>
+              </PanelSectionRow>
+            </PanelSection>
+          </>
+        )}
+      </>
+    );
   }
 
   const s = status?.settings;
   const connected = status?.connected ?? false;
   const supportTier = status?.support_tier ?? 1;
   const driftCount = status?.drift ? Object.keys(status.drift).length : 0;
+  const unknownOwners = status?.unknown_owners ?? [];
   const supports6GHz = s?.supports_6ghz ?? false;
   const isDeckLcd = s?.device_family === "deck_lcd";
+  // Mutation lock: normal busy state plus a stuck backend-switch poll
+  // failure (backendSwitch.error), which holds controls until the next
+  // successful getBackendSwitchStatus reconciles. No retry timers.
+  const mutationLocked = isBusy || backendSwitch?.error != null;
 
   // Check if all safe optimizations are already active
   const allSafeActive =
@@ -580,6 +750,49 @@ function Content() {
         </Banner>
       )}
 
+      {/* Rejected operations */}
+      {actionError && (
+        <Banner variant="error" icon="✕">
+          {actionError}
+        </Banner>
+      )}
+
+      {/* Transfer warnings and setter/reset errors[] */}
+      {actionWarnings && actionWarnings.length > 0 && (
+        <Banner variant="warning" icon="⚠">
+          {actionWarnings.map((w, i) => (
+            <span key={i}>
+              {w}
+              {i < actionWarnings.length - 1 && <br />}
+            </span>
+          ))}
+        </Banner>
+      )}
+
+      {/* Settings that lost track of their network profile */}
+      {connected && unknownOwners.length > 0 && (
+        <Banner variant="warning" icon="⚠">
+          {unknownOwners.length} setting{unknownOwners.length > 1 ? "s" : ""}{" "}
+          lost track of {unknownOwners.length > 1 ? "their" : "its"} network
+          ({unknownOwners.join(", ")}). Re-apply on the desired network.
+        </Banner>
+      )}
+
+      {/* Stale status: last known data with timestamp, never fake-fresh */}
+      {isStale && (
+        <Banner variant="warning" icon="⚠">
+          Showing last known status
+          {statusAt ? ` from ${new Date(statusAt).toLocaleTimeString()}` : ""}
+          {" "}— refresh failed{statusError ? `: ${statusError}` : ""}.{" "}
+          <span
+            style={{ textDecoration: "underline", cursor: "pointer" }}
+            onClick={() => refreshStatus(true)}
+          >
+            Retry now
+          </span>
+        </Banner>
+      )}
+
       {/* Backend switch result banner */}
       {backendSwitch && !backendSwitch.in_progress && backendSwitch.result && (() => {
         const r = backendSwitch.result;
@@ -605,24 +818,29 @@ function Content() {
       })()}
 
       {/* Optimize result banner */}
-      {optimizeResult && (
-        <Banner
-          variant={
-            optimizeResult.applied === optimizeResult.total ? "success" : "warning"
-          }
-        >
-          {optimizeResult.applied === optimizeResult.total
-            ? "All applied"
-            : `${optimizeResult.applied}/${optimizeResult.total} applied`}
-        </Banner>
-      )}
+      {optimizeResult && (() => {
+        const failed = optimizeResult.total - optimizeResult.applied;
+        const variant =
+          optimizeResult.total === 0
+            ? "info"
+            : failed > 0
+              ? "warning"
+              : "success";
+        const text =
+          optimizeResult.total === 0
+            ? "No optimizations enabled"
+            : failed > 0
+              ? `${optimizeResult.applied}/${optimizeResult.total} applied (${failed} failed)`
+              : "All applied";
+        return <Banner variant={variant}>{text}</Banner>;
+      })()}
 
       {/* Optimize button */}
       <PanelSection>
         <PanelSectionRow>
           <ButtonItem
             layout="below"
-            disabled={!connected || applyingAll || isBusy}
+            disabled={!connected || applyingAll || mutationLocked}
             onClick={handleOptimize}
           >
             {applyingAll
@@ -642,7 +860,7 @@ function Content() {
           explanation="The OS enables WiFi power saving at multiple levels - the wireless chip, the PCIe bus connecting it to the CPU, and driver-level low power modes. These cause latency spikes, packet batching, and throughput degradation during sustained streaming. This toggle disables all of them, keeping the WiFi hardware fully awake. Battery impact is minimal."
           {...getBadge("power_save", status, errors.power_save ?? null)}
           checked={s?.power_save_disabled ?? false}
-          disabled={isBusy}
+          disabled={mutationLocked}
           error={errors.power_save}
           onChange={(val: boolean) =>
             handleToggle("power_save", () => backend.setPowerSave(val))
@@ -654,7 +872,7 @@ function Content() {
           explanation="Your device scans for other WiFi networks every few minutes even while connected. Each scan causes a brief interruption that can drop packets and stutter game streaming. Locking to your current access point stops these scans entirely. You'll need to disable this before switching to a different network or access point."
           {...getBadge("bssid_lock", status, errors.bssid_lock ?? null)}
           checked={s?.bssid_lock_enabled ?? false}
-          disabled={isBusy || (!connected && !s?.bssid_lock_enabled)}
+          disabled={mutationLocked || (!connected && !s?.bssid_lock_enabled)}
           error={errors.bssid_lock}
           onChange={(val: boolean) =>
             handleToggle("bssid_lock", () => backend.setBssidLock(val))
@@ -666,7 +884,7 @@ function Content() {
           explanation="The OS often resets WiFi settings after sleep or updates. This installs a small script that automatically re-applies your optimizations every time the WiFi reconnects. It runs outside of Decky, so it works even if Decky has issues. Removing the plugin will also remove this script."
           {...getBadge(undefined, status, errors.auto_fix ?? null)}
           checked={s?.auto_fix_on_wake ?? false}
-          disabled={isBusy}
+          disabled={mutationLocked}
           error={errors.auto_fix}
           onChange={(val: boolean) =>
             handleToggle("auto_fix", () => backend.setAutoFix(val))
@@ -678,7 +896,7 @@ function Content() {
           explanation="Increases kernel network buffer sizes and transmit queue length to handle the bursty UDP traffic that game streaming produces. Without this, packets can be dropped during high-bitrate moments, causing frame drops or brief quality dips. These settings benefit all network interfaces, including ethernet. They reset on every reboot."
           {...getBadge("buffer_tuning", status, errors.buffer_tuning ?? null)}
           checked={s?.buffer_tuning_enabled ?? false}
-          disabled={isBusy}
+          disabled={mutationLocked}
           error={errors.buffer_tuning}
           onChange={(val: boolean) =>
             handleToggle("buffer_tuning", () => backend.setBufferTuning(val))
@@ -698,7 +916,7 @@ function Content() {
           } for WiFi avoids this interference entirely, giving you a cleaner, faster connection. Only enable this if your router supports 5 GHz. If your network is 2.4 GHz only, this will prevent you from connecting.`}
           {...getBadge("band_preference", status, errors.band_preference ?? null)}
           checked={s?.band_preference_enabled ?? false}
-          disabled={isBusy || (!connected && !s?.band_preference_enabled)}
+          disabled={mutationLocked || (!connected && !s?.band_preference_enabled)}
           error={errors.band_preference}
           onChange={(val: boolean) =>
             handleToggle("band_preference", () =>
@@ -712,7 +930,7 @@ function Content() {
           explanation="Your internet provider's DNS servers translate domain names into IP addresses. They can be slow or unreliable. Switching to a public DNS like Cloudflare (1.1.1.1) or Google (8.8.8.8) can speed up initial connections and improve reliability. This only affects the current WiFi network."
           {...getBadge(undefined, status, errors.dns ?? null)}
           checked={s?.dns_enabled ?? false}
-          disabled={isBusy || (!connected && !s?.dns_enabled)}
+          disabled={mutationLocked || (!connected && !s?.dns_enabled)}
           error={errors.dns}
           onChange={(val: boolean) =>
             handleToggle("dns", () =>
@@ -762,7 +980,7 @@ function Content() {
           explanation="Some networks have poor or misconfigured IPv6 support, which can cause slow DNS resolution, connection timeouts, or routing issues. Disabling IPv6 forces all traffic through IPv4. Only enable this if you're experiencing issues - most modern networks handle IPv6 fine."
           {...getBadge("ipv6", status, errors.ipv6 ?? null)}
           checked={s?.ipv6_disabled ?? false}
-          disabled={isBusy || (!connected && !s?.ipv6_disabled)}
+          disabled={mutationLocked || (!connected && !s?.ipv6_disabled)}
           error={errors.ipv6}
           onChange={(val: boolean) =>
             handleToggle("ipv6", () => backend.setIpv6(val))
@@ -774,7 +992,7 @@ function Content() {
           explanation="Replaces the default network queue with CAKE, which isolates traffic flows so a background download or another device can't starve your game stream. Also filters redundant TCP acknowledgments and prioritizes latency-sensitive packets. Does not limit your bandwidth. Resets on reboot and is reapplied automatically if auto-fix on wake is enabled."
           {...getBadge("cake", status, errors.cake ?? null)}
           checked={s?.cake_enabled ?? false}
-          disabled={isBusy || (!connected && !s?.cake_enabled)}
+          disabled={mutationLocked || (!connected && !s?.cake_enabled)}
           error={errors.cake}
           onChange={(val: boolean) =>
             handleToggle("cake", () => backend.setCake(val))
@@ -784,8 +1002,8 @@ function Content() {
           <BackendToggleRow
             status={status}
             backendSwitch={backendSwitch}
-            error={errors.wifi_backend}
-            isBusy={isBusy}
+            error={errors.wifi_backend ?? backendSwitch?.error}
+            isBusy={mutationLocked}
             onToggle={handleBackendToggle}
           />
         )}
@@ -807,7 +1025,7 @@ function Content() {
 
       <ActionsSection
         connected={connected}
-        isBusy={isBusy}
+        isBusy={mutationLocked}
         onForceReapply={handleForceReapply}
         onReset={handleResetSettings}
       />
