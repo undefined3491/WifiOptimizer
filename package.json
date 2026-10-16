@@ -1,5 +1,5 @@
 {
-  "name": "wifi-optimizer",
+  "name": "wifi-optimizer-tms",
   "version": "0.11.6",
   "description": "WiFi optimizer for game streaming on Steam Deck and PC handhelds",
   "type": "module",

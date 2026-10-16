@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Applied the owner-selected WiFi Optimizer TMS display/manifest/frontend name and wifi-optimizer-tms package name; rebuilt the bundle and updated source-map validation. Retained existing technical paths and the current repository identity for a separate coordinated cutover. Device migration and first Stable remain pending.
+
 - Updated installer, in-app update checks and downloads, clone instructions, and bug-report links to use the `undefined3491/WifiOptimizer` fork.
 - Preserved the upstream author credits and BSD-3-Clause license.
 - Documented the audit-first roadmap, dated SteamOS compatibility research and LCD / Stable test protocol; qualified inherited performance and hardware-support claims pending validation.

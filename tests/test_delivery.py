@@ -107,7 +107,7 @@ def source_map(prefix: str = "../", source_text: str = "export const value = 1;\
 class SourceMapTests(unittest.TestCase):
     def test_normalizes_allowed_uri_prefix_and_crlf_only(self):
         relative = source_map()
-        decky = source_map("decky://decky/plugin/WiFi%20Optimizer/")
+        decky = source_map("decky://decky/plugin/WiFi%20Optimizer%20TMS/")
         decky["sourcesContent"] = ["export const value = 1;\r\n", "module.exports = {};\r\n"]
         self.assertEqual(normalize_source_map(relative), normalize_source_map(decky))
 
@@ -121,7 +121,7 @@ class SourceMapTests(unittest.TestCase):
         self.assertNotEqual(original, normalize_source_map(altered))
 
     def test_rejects_unsupported_or_ambiguous_source_paths(self):
-        for path in ("https://example.test/src/index.tsx", "../src/../secret.ts"):
+        for path in ("https://example.test/src/index.tsx", "../src/../secret.ts", "decky://decky/plugin/WiFi%20Optimizer/src/index.tsx"):
             data = source_map()
             data["sources"][0] = path
             with self.subTest(path=path), self.assertRaisesRegex(ValueError, "source"):
@@ -159,7 +159,7 @@ class DistTests(unittest.TestCase):
     def test_snapshot_and_verify_accept_semantically_equivalent_map(self):
         snapshot = self.root / "snapshot.json"
         snapshot_dist(self.root, snapshot)
-        equivalent = source_map("decky://decky/plugin/WiFi%20Optimizer/")
+        equivalent = source_map("decky://decky/plugin/WiFi%20Optimizer%20TMS/")
         equivalent["sourcesContent"] = ["export const value = 1;\r\n", "module.exports = {};\r\n"]
         (self.root / "dist/index.js.map").write_text(json.dumps(equivalent), encoding="utf-8")
         (self.root / "dist/index.js").write_bytes(b"const value = 1;\r\n")

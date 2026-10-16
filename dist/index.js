@@ -1,4 +1,4 @@
-const manifest = {"name":"WiFi Optimizer"};
+const manifest = {"name":"WiFi Optimizer TMS"};
 const API_VERSION = 2;
 const internalAPIConnection = window.__DECKY_SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED_deckyLoaderAPIInit;
 if (!internalAPIConnection) {
@@ -115,7 +115,7 @@ const ERROR_MESSAGES = {
     unexpected: "Something went wrong. Check the Decky log for details.",
 };
 
-// Design tokens for the WiFi Optimizer panel. Keep this in sync with the
+// Design tokens for the WiFi Optimizer TMS panel. Keep this in sync with the
 // palette used in the README mockup and the four semantic banner colors
 // (success/warning/error/info) that Decky's Quick Access Menu supports well
 // against its dark background.
@@ -503,11 +503,11 @@ class ErrorBoundary extends SP_REACT.Component {
         return { err };
     }
     componentDidCatch(err, info) {
-        console.error("WiFi Optimizer render error:", err, info);
+        console.error("WiFi Optimizer TMS render error:", err, info);
     }
     render() {
         if (this.state.err) {
-            return (SP_JSX.jsx(Banner, { variant: "error", children: "WiFi Optimizer hit an unexpected error. Close and reopen the panel to recover. If it keeps happening, please report at github.com/undefined3491/WifiOptimizer." }));
+            return (SP_JSX.jsx(Banner, { variant: "error", children: "WiFi Optimizer TMS hit an unexpected error. Close and reopen the panel to recover. If it keeps happening, please report at github.com/undefined3491/WifiOptimizer." }));
         }
         return this.props.children;
     }
@@ -575,7 +575,7 @@ function Content() {
             }
         }
         catch (e) {
-            console.error("WiFi Optimizer: failed to get status", e);
+            console.error("WiFi Optimizer TMS: failed to get status", e);
         }
     }, []);
     const stopBackendPoll = () => {
@@ -694,7 +694,7 @@ function Content() {
         if (!updating)
             return;
         const id = setTimeout(() => {
-            console.error("WiFi Optimizer: update didn't complete within 60s");
+            console.error("WiFi Optimizer TMS: update didn't complete within 60s");
             setUpdating(false);
             setUpdateError("Update didn't complete. Try again, or reinstall manually from Konsole.");
         }, UPDATE_TIMEOUT_MS);
@@ -900,7 +900,7 @@ function Content() {
     };
     // Don't render content until first status arrives (prevents disconnect flash)
     if (!status) {
-        return SP_JSX.jsx(DFL.PanelSection, { title: "WiFi Optimizer" });
+        return SP_JSX.jsx(DFL.PanelSection, { title: "WiFi Optimizer TMS" });
     }
     const s = status?.settings;
     const connected = status?.connected ?? false;
@@ -969,11 +969,11 @@ var index = definePlugin(() => {
         });
     }
     catch (e) {
-        console.error("WiFi Optimizer: failed to register game launch listener", e);
+        console.error("WiFi Optimizer TMS: failed to register game launch listener", e);
     }
     return {
-        name: "WiFi Optimizer",
-        titleView: SP_JSX.jsx("div", { className: DFL.staticClasses.Title, children: "WiFi Optimizer" }),
+        name: "WiFi Optimizer TMS",
+        titleView: SP_JSX.jsx("div", { className: DFL.staticClasses.Title, children: "WiFi Optimizer TMS" }),
         content: (SP_JSX.jsx(ErrorBoundary, { children: SP_JSX.jsx(Content, {}) })),
         icon: SP_JSX.jsx(FaWifi, {}),
         onDismount() {
