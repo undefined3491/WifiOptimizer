@@ -33,6 +33,10 @@ interface BackendToggleRowProps {
   backendSwitch: BackendSwitchStatus | null;
   error: string | undefined;
   isBusy: boolean;
+  // Retry affordance (D4): error locked, nothing in flight, UI not busy.
+  // The Retry button is enabled by this, independent of the mutation lock
+  // (which the error itself feeds), so the lock never deadlocks its retry.
+  canRetry: boolean;
   onToggle: (on: boolean) => void;
   onRetry: (target: "iwd" | "wpa_supplicant") => void;
 }
@@ -42,6 +46,7 @@ export function BackendToggleRow({
   backendSwitch,
   error,
   isBusy,
+  canRetry,
   onToggle,
   onRetry,
 }: BackendToggleRowProps) {
@@ -97,15 +102,24 @@ export function BackendToggleRow({
       ? `Configured ${desired} · effective unknown`
       : "Alternate WiFi backend - can fix sleep/wake and stability issues";
 
-  const badge: { badge: BadgeStatus; text: string } = error
-    ? { badge: "error", text: "failed" }
-    : switching
-      ? { badge: "unknown", text: "…" }
-      : desired === null
-        ? { badge: "unknown", text: "unknown" }
-        : isWpa
-          ? { badge: "active", text: "wpa_supplicant" }
-          : { badge: "off", text: "iwd" };
+  // Tick-bound unknown (D4): the poll parked the switch after too many
+  // in_progress ticks (switching phase, but no poll in flight and the
+  // outcome unknowable). Rendered as unknown with the exclusion preserved
+  // via the error lock, until a Retry reconciles.
+  const unknownOutcome =
+    !switching && backendSwitch?.phase === "switching" && canRetry;
+
+  const badge: { badge: BadgeStatus; text: string } = unknownOutcome
+    ? { badge: "unknown", text: "unknown" }
+    : error
+      ? { badge: "error", text: "failed" }
+      : switching
+        ? { badge: "unknown", text: "…" }
+        : desired === null
+          ? { badge: "unknown", text: "unknown" }
+          : isWpa
+            ? { badge: "active", text: "wpa_supplicant" }
+            : { badge: "off", text: "iwd" };
 
   // Inline result shown right under the toggle so it's visible where the
   // user clicked - the top-of-panel banner is often off-screen when the
@@ -127,11 +141,11 @@ export function BackendToggleRow({
       error={error}
       onChange={onToggle}
     >
-      {retryTarget !== null && (diverged || unknownEffective) && !switching && (
+      {retryTarget !== null && (diverged || unknownEffective || canRetry) && !switching && (
         <PanelSectionRow>
           <ButtonItem
             layout="below"
-            disabled={isBusy}
+            disabled={isBusy && !canRetry}
             onClick={() => onRetry(retryTarget)}
           >
             {`Retry switch to ${retryTarget}`}

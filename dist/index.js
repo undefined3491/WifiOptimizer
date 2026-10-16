@@ -352,7 +352,7 @@ const EXPLANATION = "Your system defaults to iwd for WiFi management. Some devic
     "Note: some networks (WPA3-only, certain enterprise setups) behave " +
     "differently between backends - if your WiFi stops connecting after a " +
     "switch, try switching back.";
-function BackendToggleRow({ status, backendSwitch, error, isBusy, onToggle, onRetry, }) {
+function BackendToggleRow({ status, backendSwitch, error, isBusy, canRetry, onToggle, onRetry, }) {
     // Desired vs effective (ST0-009 D7): config and reality are never
     // conflated, and "" never silently defaults to iwd — unknown is an
     // explicit branch (including when the backend tool is unavailable).
@@ -395,22 +395,29 @@ function BackendToggleRow({ status, backendSwitch, error, isBusy, onToggle, onRe
         : unknownEffective
             ? `Configured ${desired} · effective unknown`
             : "Alternate WiFi backend - can fix sleep/wake and stability issues";
-    const badge = error
-        ? { badge: "error", text: "failed" }
-        : switching
-            ? { badge: "unknown", text: "…" }
-            : desired === null
-                ? { badge: "unknown", text: "unknown" }
-                : isWpa
-                    ? { badge: "active", text: "wpa_supplicant" }
-                    : { badge: "off", text: "iwd" };
+    // Tick-bound unknown (D4): the poll parked the switch after too many
+    // in_progress ticks (switching phase, but no poll in flight and the
+    // outcome unknowable). Rendered as unknown with the exclusion preserved
+    // via the error lock, until a Retry reconciles.
+    const unknownOutcome = !switching && backendSwitch?.phase === "switching" && canRetry;
+    const badge = unknownOutcome
+        ? { badge: "unknown", text: "unknown" }
+        : error
+            ? { badge: "error", text: "failed" }
+            : switching
+                ? { badge: "unknown", text: "…" }
+                : desired === null
+                    ? { badge: "unknown", text: "unknown" }
+                    : isWpa
+                        ? { badge: "active", text: "wpa_supplicant" }
+                        : { badge: "off", text: "iwd" };
     // Inline result shown right under the toggle so it's visible where the
     // user clicked - the top-of-panel banner is often off-screen when the
     // user is scrolled down to the Advanced section.
     const lastResult = !switching && !error && backendSwitch?.result && !backendSwitch.result.needs_reboot
         ? backendSwitch.result
         : null;
-    return (SP_JSX.jsxs(InfoRow, { label: "Use wpa_supplicant backend", subtitle: phaseText ?? baseSubtitle, explanation: EXPLANATION, badge: badge.badge, text: badge.text, checked: checked, disabled: switching || isBusy, error: error, onChange: onToggle, children: [retryTarget !== null && (diverged || unknownEffective) && !switching && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: isBusy, onClick: () => onRetry(retryTarget), children: `Retry switch to ${retryTarget}` }) })), lastResult?.success && (() => {
+    return (SP_JSX.jsxs(InfoRow, { label: "Use wpa_supplicant backend", subtitle: phaseText ?? baseSubtitle, explanation: EXPLANATION, badge: badge.badge, text: badge.text, checked: checked, disabled: switching || isBusy, error: error, onChange: onToggle, children: [retryTarget !== null && (diverged || unknownEffective || canRetry) && !switching && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: isBusy && !canRetry, onClick: () => onRetry(retryTarget), children: `Retry switch to ${retryTarget}` }) })), lastResult?.success && (() => {
                 const timedOut = lastResult.reconnect_timed_out;
                 const parts = [`Switched to ${lastResult.backend}`];
                 if (lastResult.recovery_performed)
@@ -478,6 +485,24 @@ function PanelHeader({ driver, version, lastApplied, lastEnforced, deviceLabel, 
 
 function PanelFooter({ version }) {
     const [diagState, setDiagState] = SP_REACT.useState("idle");
+    // Timeout ids (D5): cleared on unmount so no timer touches state late.
+    const timeoutsRef = SP_REACT.useRef([]);
+    const disposedRef = SP_REACT.useRef(false);
+    SP_REACT.useEffect(() => {
+        return () => {
+            disposedRef.current = true;
+            for (const id of timeoutsRef.current)
+                clearTimeout(id);
+            timeoutsRef.current = [];
+        };
+    }, []);
+    const laterIdle = (ms) => {
+        timeoutsRef.current.push(setTimeout(() => {
+            if (disposedRef.current)
+                return;
+            setDiagState("idle");
+        }, ms));
+    };
     const rowStyle = {
         fontSize: theme.fontSize.tiny,
         color: theme.text.dim,
@@ -486,6 +511,8 @@ function PanelFooter({ version }) {
         setDiagState("copying");
         try {
             const info = await getDiagnosticInfo();
+            if (disposedRef.current)
+                return;
             // Check the collection success flag before reporting done/saved.
             if (!info || info.success === false) {
                 throw new Error("diagnostic collection failed");
@@ -493,21 +520,27 @@ function PanelFooter({ version }) {
             const text = JSON.stringify(info, null, 2);
             try {
                 await navigator.clipboard.writeText(text);
+                if (disposedRef.current)
+                    return;
                 setDiagState("done");
             }
             catch {
                 const saved = await saveDiagnosticInfo();
+                if (disposedRef.current)
+                    return;
                 // Check the save success flag before reporting saved.
                 if (!saved || saved.success === false) {
                     throw new Error("diagnostic save failed");
                 }
                 setDiagState("saved");
             }
-            setTimeout(() => setDiagState("idle"), 5000);
+            laterIdle(5000);
         }
         catch {
+            if (disposedRef.current)
+                return;
             setDiagState("error");
-            setTimeout(() => setDiagState("idle"), 3000);
+            laterIdle(3000);
         }
     };
     const label = diagState === "done"
@@ -529,6 +562,10 @@ function ActionsSection({ connected, isBusy, onForceReapply, onReset, }) {
 const REFRESH_INTERVAL = 3000;
 const RECONNECT_DELAY = 4000;
 const BACKEND_POLL_INTERVAL = 750;
+// Bounded backend-switch poll (D4): 40 ticks x 750ms = 30s. Past this an
+// in_progress switch is parked as unknown (outcome unknowable, controls
+// stay excluded) instead of spinning forever.
+const BACKEND_POLL_MAX_TICKS = 40;
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const UPDATE_CHECK_DEDUPE_MS = 60 * 1000;
 const UPDATE_TIMEOUT_MS = 60 * 1000;
@@ -627,6 +664,15 @@ function Content() {
     const dnsProviderDraftRef = SP_REACT.useRef(null);
     const dnsDirtyRef = SP_REACT.useRef(false);
     const dnsFocusedRef = SP_REACT.useRef(false);
+    // Dismount safety (D5): set once on unmount; every async continuation
+    // below returns early when set, so no timer or in-flight promise touches
+    // state or IPC after dismount.
+    const disposedRef = SP_REACT.useRef(false);
+    // Bounded poll lifecycle (D4): consecutive in_progress ticks, in-flight
+    // overlap flag, and remaining reject-retry budget (one extra attempt).
+    const backendPollTicksRef = SP_REACT.useRef(0);
+    const backendPollInFlightRef = SP_REACT.useRef(false);
+    const backendPollRetriesRef = SP_REACT.useRef(0);
     const setBusy = SP_REACT.useCallback((val) => {
         busyRef.current = val;
         setIsBusy(val);
@@ -641,6 +687,8 @@ function Content() {
         }
         lastUpdateCheckAtRef.current = now;
         checkForUpdate().then((r) => {
+            if (disposedRef.current)
+                return;
             setUpdateInfo(r);
             if (r && !r.success) {
                 setUpdateError(r.message ?? "Couldn't check for updates.");
@@ -649,6 +697,8 @@ function Content() {
                 setUpdateError(null);
             }
         }).catch(() => {
+            if (disposedRef.current)
+                return;
             setUpdateError("Couldn't check for updates.");
         });
     }, []);
@@ -660,6 +710,8 @@ function Content() {
             return;
         try {
             const s = await getStatus();
+            if (disposedRef.current)
+                return;
             if (s && s.success !== false) {
                 statusRef.current = s;
                 setStatus(s);
@@ -685,6 +737,8 @@ function Content() {
             }
         }
         catch (e) {
+            if (disposedRef.current)
+                return;
             console.error("WiFi Optimizer TMS: failed to get status", e);
             setStatusError("Couldn't reach the plugin. It may still be loading.");
             if (statusRef.current)
@@ -699,10 +753,42 @@ function Content() {
     };
     const beginBackendPoll = SP_REACT.useCallback(() => {
         stopBackendPoll();
+        backendPollTicksRef.current = 0;
+        backendPollRetriesRef.current = 0;
         backendPollRef.current = setInterval(async () => {
+            // Overlap guard (D4): skip the tick when a poll is in flight.
+            if (backendPollInFlightRef.current)
+                return;
+            backendPollInFlightRef.current = true;
             try {
                 const s = await getBackendSwitchStatus();
+                if (disposedRef.current)
+                    return;
+                // Any answered poll resets the reject-retry budget.
+                backendPollRetriesRef.current = 0;
                 if (s.in_progress) {
+                    backendPollTicksRef.current += 1;
+                    if (backendPollTicksRef.current >= BACKEND_POLL_MAX_TICKS) {
+                        // Tick bound (D4): stop spinning and park as unknown. The
+                        // phase/in_progress combo (switching phase, no poll in flight)
+                        // renders the row's unknown representation; the error preserves
+                        // the exclusion until a Retry reconciles.
+                        stopBackendPoll();
+                        await refreshStatus(true);
+                        if (disposedRef.current)
+                            return;
+                        setBackendSwitch({
+                            success: false,
+                            in_progress: false,
+                            phase: "switching",
+                            target: s.target ?? null,
+                            started_at: s.started_at ?? 0,
+                            result: null,
+                            error: "The backend switch is taking too long and its outcome is unknown. Retry the switch.",
+                        });
+                        setBusy(false);
+                        return;
+                    }
                     // Mid-switch: update so the subtitle can show the current phase.
                     setBackendSwitch(s);
                     return;
@@ -720,17 +806,36 @@ function Content() {
                         wifi_backend: s.result.message + detail,
                     }));
                 }
+                else if (!s.result || s.result.success) {
+                    // Reconciliation (D4): a successful terminal status clears a
+                    // stale row error; replacing backendSwitch below clears the lock.
+                    setErrors((prev) => {
+                        const next = { ...prev };
+                        delete next.wifi_backend;
+                        return next;
+                    });
+                }
                 await refreshStatus(true);
+                if (disposedRef.current)
+                    return;
                 setBackendSwitch(s);
                 setBusy(false);
             }
             catch (e) {
+                if (disposedRef.current)
+                    return;
+                // Bounded retry (D4): one extra attempt at the same interval, then
+                // the existing error+lock.
+                if (backendPollRetriesRef.current < 1) {
+                    backendPollRetriesRef.current += 1;
+                    return;
+                }
                 stopBackendPoll();
                 setBusy(false);
                 console.error("backend switch poll error", e);
                 // Poll rejection: clear in-flight state but keep mutation controls
-                // locked via an additive error until the next successful
-                // getBackendSwitchStatus reconciles (no retry timers).
+                // locked via an additive error until a Retry click or the next
+                // successful getBackendSwitchStatus reconciles (no retry timers).
                 setBackendSwitch((prev) => ({
                     success: false,
                     in_progress: false,
@@ -740,6 +845,9 @@ function Content() {
                     result: prev?.result ?? null,
                     error: "Lost contact with the backend switch. Reopen the panel or start a new switch.",
                 }));
+            }
+            finally {
+                backendPollInFlightRef.current = false;
             }
         }, BACKEND_POLL_INTERVAL);
     }, [refreshStatus, setBusy]);
@@ -785,6 +893,8 @@ function Content() {
         // Resume backend-switch polling if one is in flight (panel was reopened mid-switch)
         getBackendSwitchStatus()
             .then((s) => {
+            if (disposedRef.current)
+                return;
             if (s.in_progress) {
                 setBackendSwitch(s);
                 setBusy(true);
@@ -797,10 +907,17 @@ function Content() {
         })
             .catch(() => { });
         return () => {
-            if (backendPollRef.current)
-                clearInterval(backendPollRef.current);
+            stopBackendPoll();
         };
     }, [beginBackendPoll, runUpdateCheck, setBusy]);
+    // Dismount safety (D5): flag every async continuation checks, and null
+    // the poll ref via stopBackendPoll above, so a launch→dismount→fire
+    // path performs zero IPC and zero setState.
+    SP_REACT.useEffect(() => {
+        return () => {
+            disposedRef.current = true;
+        };
+    }, []);
     // Retry update check when connectivity recovers. The initial one-shot check
     // in the mount effect misses the case where the panel was already open when
     // the network came back. Skip until status has loaded to avoid a spurious
@@ -894,6 +1011,8 @@ function Content() {
         setOptimizeResult(null);
         try {
             const result = await fn();
+            if (disposedRef.current)
+                return null;
             if (!result.success) {
                 const detail = result.detail ? ` (${result.detail})` : "";
                 const msg = (result.message ?? ERROR_MESSAGES[result.error ?? ""] ?? "Unknown error") + detail;
@@ -918,10 +1037,14 @@ function Content() {
             // Wait for WiFi to reconnect before refreshing status
             if (result.reconnected) {
                 await new Promise((r) => setTimeout(r, RECONNECT_DELAY));
+                if (disposedRef.current)
+                    return null;
             }
             return result;
         }
         catch (e) {
+            if (disposedRef.current)
+                return null;
             console.error(`WiFi Optimizer TMS: toggle ${key} failed`, e);
             setErrors((prev) => ({ ...prev, [key]: "Request failed. Please try again." }));
             return null;
@@ -929,9 +1052,12 @@ function Content() {
         finally {
             // Refresh before clearing busy so toggles/badges don't briefly flip to
             // stale pre-operation values in the interim render. Refresh runs even on
-            // unexpected errors to keep UI consistent with backend state.
-            await refreshStatus(true);
-            setBusy(false);
+            // unexpected errors to keep UI consistent with backend state. Skipped
+            // after dismount: zero IPC, zero setState (D5).
+            if (!disposedRef.current) {
+                await refreshStatus(true);
+                setBusy(false);
+            }
         }
     };
     const handleOptimize = async () => {
@@ -945,6 +1071,8 @@ function Content() {
         setOptimizeResult(null);
         try {
             const result = await optimizeSafe();
+            if (disposedRef.current)
+                return;
             setOptimizeResult(result);
             if (result.results) {
                 const newErrors = {};
@@ -986,18 +1114,25 @@ function Content() {
             // optimize_safe contains BSSID lock which reconnects
             if (result.reconnected) {
                 await new Promise((r) => setTimeout(r, RECONNECT_DELAY));
+                if (disposedRef.current)
+                    return;
             }
         }
         catch (e) {
+            if (disposedRef.current)
+                return;
             console.error("optimize error", e);
             setActionError("Couldn't apply optimizations. Please try again.");
         }
         finally {
             // Refresh before clearing applyingAll so button doesn't briefly flip to
-            // "All good" from stale status. Refresh runs on errors too.
-            await refreshStatus(true);
-            setBusy(false);
-            setApplyingAll(false);
+            // "All good" from stale status. Refresh runs on errors too. Skipped
+            // after dismount (D5).
+            if (!disposedRef.current) {
+                await refreshStatus(true);
+                setBusy(false);
+                setApplyingAll(false);
+            }
         }
     };
     // Shared aggregate ingestion for Force Reapply and Fix-now (D1): each
@@ -1058,18 +1193,26 @@ function Content() {
         setOptimizeResult(null);
         try {
             const result = await reapplyAll();
+            if (disposedRef.current)
+                return;
             ingestAggregateResult(result);
             if (result.reconnected) {
                 await new Promise((r) => setTimeout(r, RECONNECT_DELAY));
+                if (disposedRef.current)
+                    return;
             }
         }
         catch (e) {
+            if (disposedRef.current)
+                return;
             console.error("force reapply error", e);
             setActionError("Force reapply failed. Please try again.");
         }
         finally {
-            await refreshStatus(true);
-            setBusy(false);
+            if (!disposedRef.current) {
+                await refreshStatus(true);
+                setBusy(false);
+            }
         }
     };
     // Fix-now repair (ST0-011, D1): re-applies only enabled-and-drifted
@@ -1086,18 +1229,26 @@ function Content() {
         setOptimizeResult(null);
         try {
             const result = await repairDrifted();
+            if (disposedRef.current)
+                return;
             ingestAggregateResult(result);
             if (result.reconnected) {
                 await new Promise((r) => setTimeout(r, RECONNECT_DELAY));
+                if (disposedRef.current)
+                    return;
             }
         }
         catch (e) {
+            if (disposedRef.current)
+                return;
             console.error("repair drifted error", e);
             setActionError("Couldn't repair drifted settings. Please try again.");
         }
         finally {
-            await refreshStatus(true);
-            setBusy(false);
+            if (!disposedRef.current) {
+                await refreshStatus(true);
+                setBusy(false);
+            }
         }
     };
     const handleResetSettings = async () => {
@@ -1110,6 +1261,8 @@ function Content() {
         setActionWarnings(null);
         try {
             const result = await resetSettings();
+            if (disposedRef.current)
+                return;
             const errs = result.errors ?? [];
             if (errs.length) {
                 // Non-empty errors[] (possibly with success False) is a warning,
@@ -1121,12 +1274,16 @@ function Content() {
             }
         }
         catch (e) {
+            if (disposedRef.current)
+                return;
             console.error("reset error", e);
             setActionError("Reset failed. Please try again.");
         }
         finally {
-            await refreshStatus(true);
-            setBusy(false);
+            if (!disposedRef.current) {
+                await refreshStatus(true);
+                setBusy(false);
+            }
         }
     };
     // Drop all three DNS draft fields without IPC (D3 Cancel, and the
@@ -1151,6 +1308,8 @@ function Content() {
         setDnsDraftError(null);
         const servers = provider === "custom" ? dnsAddressesDraft : "";
         const r = await handleToggle("dns", () => setDns(true, provider, servers));
+        if (disposedRef.current)
+            return;
         if (r?.success) {
             dropDnsDraft();
         }
@@ -1171,6 +1330,8 @@ function Content() {
         setOptimizeResult(null);
         try {
             const res = await startBackendSwitch(target);
+            if (disposedRef.current)
+                return;
             if (!res.accepted) {
                 setErrors((prev) => ({
                     ...prev,
@@ -1193,6 +1354,8 @@ function Content() {
             beginBackendPoll();
         }
         catch (e) {
+            if (disposedRef.current)
+                return;
             setBusy(false);
             setErrors((prev) => ({
                 ...prev,
@@ -1219,6 +1382,8 @@ function Content() {
         setUpdating(true);
         try {
             const r = await applyUpdate();
+            if (disposedRef.current)
+                return;
             if (r && !r.success) {
                 setUpdating(false);
                 setUpdateError(r.message ?? "Update failed. Please try again.");
@@ -1229,6 +1394,8 @@ function Content() {
         catch {
             // A genuine pre-launch failure surfaces here. A restart-kill after a
             // successful launch clears when the panel reloads.
+            if (disposedRef.current)
+                return;
             setUpdating(false);
             setUpdateError("Update failed. Try again, or reinstall manually from Konsole.");
         }
@@ -1239,12 +1406,16 @@ function Content() {
         lastUpdateCheckAtRef.current = Date.now();
         try {
             const result = await checkForUpdate();
+            if (disposedRef.current)
+                return;
             setUpdateInfo(result);
             if (result && !result.success) {
                 setUpdateError(result.message ?? "Couldn't check for updates.");
             }
         }
         catch {
+            if (disposedRef.current)
+                return;
             setUpdateError("Couldn't check for updates.");
         }
         setCheckingUpdate(false);
@@ -1252,6 +1423,8 @@ function Content() {
     const handleChannelChange = async (nextChannel) => {
         try {
             const r = await setUpdateChannel(nextChannel);
+            if (disposedRef.current)
+                return;
             if (r && !r.success) {
                 setUpdateError(r.message ?? "Couldn't change update channel.");
             }
@@ -1260,9 +1433,13 @@ function Content() {
             }
         }
         catch {
+            if (disposedRef.current)
+                return;
             setUpdateError("Couldn't change update channel.");
         }
         setUpdateInfo(null);
+        if (disposedRef.current)
+            return;
         await refreshStatus();
     };
     // Don't render content until first status arrives (prevents disconnect flash).
@@ -1277,9 +1454,14 @@ function Content() {
     const unknownOwners = status?.unknown_owners ?? [];
     const isDeckLcd = s?.device_family === "deck_lcd";
     // Mutation lock: normal busy state plus a stuck backend-switch poll
-    // failure (backendSwitch.error), which holds controls until the next
-    // successful getBackendSwitchStatus reconciles. No retry timers.
+    // failure (backendSwitch.error), which holds controls until a Retry click
+    // or the next successful getBackendSwitchStatus reconciles. No retry timers.
     const mutationLocked = isBusy || backendSwitch?.error != null;
+    // Retry affordance (D4): the error lock never deadlocks its own retry,
+    // while busy/in-flight work still blocks everything else.
+    const canRetry = backendSwitch?.error != null &&
+        !backendSwitch?.in_progress &&
+        !isBusy;
     // Check if all safe optimizations are already active
     const allSafeActive = connected &&
         status?.live?.power_save_off &&
@@ -1354,14 +1536,20 @@ function Content() {
                                                 setDnsProviderDraft("custom");
                                             setDnsAddressesDraft(e.target.value);
                                             setDnsDirty(true);
-                                        }, onFocus: () => setDnsFocused(true), onBlur: () => setDnsFocused(false) }) })), dnsDraftError && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: theme.fontSize.small, color: theme.error.text }, children: dnsDraftError }) })), dnsProviderDraft !== null && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: mutationLocked, onClick: handleDnsApply, children: "Apply DNS" }) })), dnsProviderDraft !== null && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: mutationLocked, onClick: dropDnsDraft, children: "Cancel" }) }))] })) }), SP_JSX.jsx(InfoRow, { label: "Disable IPv6", subtitle: "Use IPv4 only on this network", explanation: "Some networks have poor or misconfigured IPv6 support, which can cause slow DNS resolution, connection timeouts, or routing issues. Disabling IPv6 forces all traffic through IPv4. Only enable this if you're experiencing issues - most modern networks handle IPv6 fine.", ...getBadge("ipv6", status, errors.ipv6 ?? null), checked: s?.ipv6_disabled ?? false, disabled: mutationLocked || (!connected && !s?.ipv6_disabled), error: errors.ipv6, onChange: (val) => handleToggle("ipv6", () => setIpv6(val)) }), SP_JSX.jsx(InfoRow, { label: "Traffic shaping (CAKE)", subtitle: "Fair queuing and bufferbloat prevention", explanation: 'Replaces the egress qdisc on this device with CAKE "unlimited diffserv4 nat ack-filter" (no bandwidth limit set). It only orders packets leaving this device; it cannot control other devices, the access point, or the ISP bottleneck, and any effect needs measurement under load. Resets on reboot and is reapplied automatically if auto-fix on wake is enabled.', ...getBadge("cake", status, errors.cake ?? null), checked: s?.cake_enabled ?? false, disabled: mutationLocked || (!connected && !s?.cake_enabled), error: errors.cake, onChange: (val) => handleToggle("cake", () => setCake(val)) }), status?.live?.backend_tool_available && (SP_JSX.jsx(BackendToggleRow, { status: status, backendSwitch: backendSwitch, error: errors.wifi_backend ?? backendSwitch?.error, isBusy: mutationLocked, onToggle: handleBackendToggle, onRetry: handleBackendRetry }))] }), SP_JSX.jsxs(DFL.PanelSection, { title: "Live status", children: [connected && status?.live?.ip_address && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { fontSize: theme.fontSize.tiny, color: theme.text.tertiary }, children: ["IP: ", status.live.ip_address] }) })), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(StatsGrid, { live: status?.live ?? {}, connected: connected }) })] }), SP_JSX.jsx(ActionsSection, { connected: connected, isBusy: mutationLocked, onForceReapply: handleForceReapply, onReset: handleResetSettings }), SP_JSX.jsx(UpdatesSection, { channel: s?.update_channel ?? "stable", updating: updating, checkingUpdate: checkingUpdate, updateInfo: updateInfo, updateError: updateError, onChannelChange: handleChannelChange, onApply: handleApplyUpdate, onCheck: handleCheckForUpdate }), SP_JSX.jsx(PanelFooter, { version: status?.version ?? "?" })] }));
+                                        }, onFocus: () => setDnsFocused(true), onBlur: () => setDnsFocused(false) }) })), dnsDraftError && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: theme.fontSize.small, color: theme.error.text }, children: dnsDraftError }) })), dnsProviderDraft !== null && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: mutationLocked, onClick: handleDnsApply, children: "Apply DNS" }) })), dnsProviderDraft !== null && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: mutationLocked, onClick: dropDnsDraft, children: "Cancel" }) }))] })) }), SP_JSX.jsx(InfoRow, { label: "Disable IPv6", subtitle: "Use IPv4 only on this network", explanation: "Some networks have poor or misconfigured IPv6 support, which can cause slow DNS resolution, connection timeouts, or routing issues. Disabling IPv6 forces all traffic through IPv4. Only enable this if you're experiencing issues - most modern networks handle IPv6 fine.", ...getBadge("ipv6", status, errors.ipv6 ?? null), checked: s?.ipv6_disabled ?? false, disabled: mutationLocked || (!connected && !s?.ipv6_disabled), error: errors.ipv6, onChange: (val) => handleToggle("ipv6", () => setIpv6(val)) }), SP_JSX.jsx(InfoRow, { label: "Traffic shaping (CAKE)", subtitle: "Fair queuing and bufferbloat prevention", explanation: 'Replaces the egress qdisc on this device with CAKE "unlimited diffserv4 nat ack-filter" (no bandwidth limit set). It only orders packets leaving this device; it cannot control other devices, the access point, or the ISP bottleneck, and any effect needs measurement under load. Resets on reboot and is reapplied automatically if auto-fix on wake is enabled.', ...getBadge("cake", status, errors.cake ?? null), checked: s?.cake_enabled ?? false, disabled: mutationLocked || (!connected && !s?.cake_enabled), error: errors.cake, onChange: (val) => handleToggle("cake", () => setCake(val)) }), status?.live?.backend_tool_available && (SP_JSX.jsx(BackendToggleRow, { status: status, backendSwitch: backendSwitch, error: errors.wifi_backend ?? backendSwitch?.error, isBusy: mutationLocked, canRetry: canRetry, onToggle: handleBackendToggle, onRetry: handleBackendRetry }))] }), SP_JSX.jsxs(DFL.PanelSection, { title: "Live status", children: [connected && status?.live?.ip_address && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { fontSize: theme.fontSize.tiny, color: theme.text.tertiary }, children: ["IP: ", status.live.ip_address] }) })), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(StatsGrid, { live: status?.live ?? {}, connected: connected }) })] }), SP_JSX.jsx(ActionsSection, { connected: connected, isBusy: mutationLocked, onForceReapply: handleForceReapply, onReset: handleResetSettings }), SP_JSX.jsx(UpdatesSection, { channel: s?.update_channel ?? "stable", updating: updating, checkingUpdate: checkingUpdate, updateInfo: updateInfo, updateError: updateError, onChannelChange: handleChannelChange, onApply: handleApplyUpdate, onCheck: handleCheckForUpdate }), SP_JSX.jsx(PanelFooter, { version: status?.version ?? "?" })] }));
 }
 var index = definePlugin(() => {
     let gameLifetimeUnsub = null;
+    // Reapply timer id + disposed flag (D5): no volatile reapply or state
+    // touch after dismount.
+    let reapplyTimer = null;
+    let reapplyDisposed = false;
     try {
         gameLifetimeUnsub = SteamClient.GameSessions.RegisterForAppLifetimeNotifications((notification) => {
             if (notification.bRunning) {
-                setTimeout(() => {
+                reapplyTimer = setTimeout(() => {
+                    if (reapplyDisposed)
+                        return;
                     reapplyVolatile().catch(() => { });
                 }, 3000);
             }
@@ -1376,6 +1564,11 @@ var index = definePlugin(() => {
         content: (SP_JSX.jsx(ErrorBoundary, { children: SP_JSX.jsx(Content, {}) })),
         icon: SP_JSX.jsx(FaWifi, {}),
         onDismount() {
+            reapplyDisposed = true;
+            if (reapplyTimer) {
+                clearTimeout(reapplyTimer);
+                reapplyTimer = null;
+            }
             gameLifetimeUnsub?.unregister();
         },
     };

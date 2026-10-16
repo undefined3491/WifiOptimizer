@@ -41,6 +41,10 @@ import { theme } from "./theme";
 const REFRESH_INTERVAL = 3000;
 const RECONNECT_DELAY = 4000;
 const BACKEND_POLL_INTERVAL = 750;
+// Bounded backend-switch poll (D4): 40 ticks x 750ms = 30s. Past this an
+// in_progress switch is parked as unknown (outcome unknowable, controls
+// stay excluded) instead of spinning forever.
+const BACKEND_POLL_MAX_TICKS = 40;
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const UPDATE_CHECK_DEDUPE_MS = 60 * 1000;
 const UPDATE_TIMEOUT_MS = 60 * 1000;
@@ -157,6 +161,15 @@ function Content() {
   const dnsProviderDraftRef = useRef<string | null>(null);
   const dnsDirtyRef = useRef(false);
   const dnsFocusedRef = useRef(false);
+  // Dismount safety (D5): set once on unmount; every async continuation
+  // below returns early when set, so no timer or in-flight promise touches
+  // state or IPC after dismount.
+  const disposedRef = useRef(false);
+  // Bounded poll lifecycle (D4): consecutive in_progress ticks, in-flight
+  // overlap flag, and remaining reject-retry budget (one extra attempt).
+  const backendPollTicksRef = useRef(0);
+  const backendPollInFlightRef = useRef(false);
+  const backendPollRetriesRef = useRef(0);
 
   const setBusy = useCallback((val: boolean) => {
     busyRef.current = val;
@@ -173,6 +186,7 @@ function Content() {
     }
     lastUpdateCheckAtRef.current = now;
     backend.checkForUpdate().then((r) => {
+      if (disposedRef.current) return;
       setUpdateInfo(r);
       if (r && !r.success) {
         setUpdateError(r.message ?? "Couldn't check for updates.");
@@ -180,6 +194,7 @@ function Content() {
         setUpdateError(null);
       }
     }).catch(() => {
+      if (disposedRef.current) return;
       setUpdateError("Couldn't check for updates.");
     });
   }, []);
@@ -191,6 +206,7 @@ function Content() {
     if (!force && busyRef.current) return;
     try {
       const s = await backend.getStatus();
+      if (disposedRef.current) return;
       if (s && s.success !== false) {
         statusRef.current = s;
         setStatus(s);
@@ -213,6 +229,7 @@ function Content() {
         if (statusRef.current) setIsStale(true);
       }
     } catch (e) {
+      if (disposedRef.current) return;
       console.error("WiFi Optimizer TMS: failed to get status", e);
       setStatusError("Couldn't reach the plugin. It may still be loading.");
       if (statusRef.current) setIsStale(true);
@@ -228,10 +245,39 @@ function Content() {
 
   const beginBackendPoll = useCallback(() => {
     stopBackendPoll();
+    backendPollTicksRef.current = 0;
+    backendPollRetriesRef.current = 0;
     backendPollRef.current = setInterval(async () => {
+      // Overlap guard (D4): skip the tick when a poll is in flight.
+      if (backendPollInFlightRef.current) return;
+      backendPollInFlightRef.current = true;
       try {
         const s = await backend.getBackendSwitchStatus();
+        if (disposedRef.current) return;
+        // Any answered poll resets the reject-retry budget.
+        backendPollRetriesRef.current = 0;
         if (s.in_progress) {
+          backendPollTicksRef.current += 1;
+          if (backendPollTicksRef.current >= BACKEND_POLL_MAX_TICKS) {
+            // Tick bound (D4): stop spinning and park as unknown. The
+            // phase/in_progress combo (switching phase, no poll in flight)
+            // renders the row's unknown representation; the error preserves
+            // the exclusion until a Retry reconciles.
+            stopBackendPoll();
+            await refreshStatus(true);
+            if (disposedRef.current) return;
+            setBackendSwitch({
+              success: false,
+              in_progress: false,
+              phase: "switching",
+              target: s.target ?? null,
+              started_at: s.started_at ?? 0,
+              result: null,
+              error: "The backend switch is taking too long and its outcome is unknown. Retry the switch.",
+            });
+            setBusy(false);
+            return;
+          }
           // Mid-switch: update so the subtitle can show the current phase.
           setBackendSwitch(s);
           return;
@@ -248,17 +294,33 @@ function Content() {
             ...prev,
             wifi_backend: s.result!.message! + detail,
           }));
+        } else if (!s.result || s.result.success) {
+          // Reconciliation (D4): a successful terminal status clears a
+          // stale row error; replacing backendSwitch below clears the lock.
+          setErrors((prev) => {
+            const next = { ...prev };
+            delete next.wifi_backend;
+            return next;
+          });
         }
         await refreshStatus(true);
+        if (disposedRef.current) return;
         setBackendSwitch(s);
         setBusy(false);
       } catch (e) {
+        if (disposedRef.current) return;
+        // Bounded retry (D4): one extra attempt at the same interval, then
+        // the existing error+lock.
+        if (backendPollRetriesRef.current < 1) {
+          backendPollRetriesRef.current += 1;
+          return;
+        }
         stopBackendPoll();
         setBusy(false);
         console.error("backend switch poll error", e);
         // Poll rejection: clear in-flight state but keep mutation controls
-        // locked via an additive error until the next successful
-        // getBackendSwitchStatus reconciles (no retry timers).
+        // locked via an additive error until a Retry click or the next
+        // successful getBackendSwitchStatus reconciles (no retry timers).
         setBackendSwitch((prev) => ({
           success: false,
           in_progress: false,
@@ -268,6 +330,8 @@ function Content() {
           result: prev?.result ?? null,
           error: "Lost contact with the backend switch. Reopen the panel or start a new switch.",
         }));
+      } finally {
+        backendPollInFlightRef.current = false;
       }
     }, BACKEND_POLL_INTERVAL);
   }, [refreshStatus, setBusy]);
@@ -312,6 +376,7 @@ function Content() {
     backend
       .getBackendSwitchStatus()
       .then((s) => {
+        if (disposedRef.current) return;
         if (s.in_progress) {
           setBackendSwitch(s);
           setBusy(true);
@@ -323,9 +388,18 @@ function Content() {
       })
       .catch(() => {});
     return () => {
-      if (backendPollRef.current) clearInterval(backendPollRef.current);
+      stopBackendPoll();
     };
   }, [beginBackendPoll, runUpdateCheck, setBusy]);
+
+  // Dismount safety (D5): flag every async continuation checks, and null
+  // the poll ref via stopBackendPoll above, so a launch→dismount→fire
+  // path performs zero IPC and zero setState.
+  useEffect(() => {
+    return () => {
+      disposedRef.current = true;
+    };
+  }, []);
 
   // Retry update check when connectivity recovers. The initial one-shot check
   // in the mount effect misses the case where the panel was already open when
@@ -421,6 +495,7 @@ function Content() {
 
     try {
       const result = await fn();
+      if (disposedRef.current) return null;
       if (!result.success) {
         const detail = result.detail ? ` (${result.detail})` : "";
         const msg = (result.message ?? ERROR_MESSAGES[result.error ?? ""] ?? "Unknown error") + detail;
@@ -444,18 +519,23 @@ function Content() {
       // Wait for WiFi to reconnect before refreshing status
       if (result.reconnected) {
         await new Promise((r) => setTimeout(r, RECONNECT_DELAY));
+        if (disposedRef.current) return null;
       }
       return result;
     } catch (e) {
+      if (disposedRef.current) return null;
       console.error(`WiFi Optimizer TMS: toggle ${key} failed`, e);
       setErrors((prev) => ({ ...prev, [key]: "Request failed. Please try again." }));
       return null;
     } finally {
       // Refresh before clearing busy so toggles/badges don't briefly flip to
       // stale pre-operation values in the interim render. Refresh runs even on
-      // unexpected errors to keep UI consistent with backend state.
-      await refreshStatus(true);
-      setBusy(false);
+      // unexpected errors to keep UI consistent with backend state. Skipped
+      // after dismount: zero IPC, zero setState (D5).
+      if (!disposedRef.current) {
+        await refreshStatus(true);
+        setBusy(false);
+      }
     }
   };
 
@@ -469,6 +549,7 @@ function Content() {
     setOptimizeResult(null);
     try {
       const result = await backend.optimizeSafe();
+      if (disposedRef.current) return;
       setOptimizeResult(result);
       if (result.results) {
         const newErrors: Record<string, string> = {};
@@ -508,16 +589,21 @@ function Content() {
       // optimize_safe contains BSSID lock which reconnects
       if (result.reconnected) {
         await new Promise((r) => setTimeout(r, RECONNECT_DELAY));
+        if (disposedRef.current) return;
       }
     } catch (e) {
+      if (disposedRef.current) return;
       console.error("optimize error", e);
       setActionError("Couldn't apply optimizations. Please try again.");
     } finally {
       // Refresh before clearing applyingAll so button doesn't briefly flip to
-      // "All good" from stale status. Refresh runs on errors too.
-      await refreshStatus(true);
-      setBusy(false);
-      setApplyingAll(false);
+      // "All good" from stale status. Refresh runs on errors too. Skipped
+      // after dismount (D5).
+      if (!disposedRef.current) {
+        await refreshStatus(true);
+        setBusy(false);
+        setApplyingAll(false);
+      }
     }
   };
 
@@ -576,16 +662,21 @@ function Content() {
     setOptimizeResult(null);
     try {
       const result = await backend.reapplyAll();
+      if (disposedRef.current) return;
       ingestAggregateResult(result);
       if (result.reconnected) {
         await new Promise((r) => setTimeout(r, RECONNECT_DELAY));
+        if (disposedRef.current) return;
       }
     } catch (e) {
+      if (disposedRef.current) return;
       console.error("force reapply error", e);
       setActionError("Force reapply failed. Please try again.");
     } finally {
-      await refreshStatus(true);
-      setBusy(false);
+      if (!disposedRef.current) {
+        await refreshStatus(true);
+        setBusy(false);
+      }
     }
   };
 
@@ -602,16 +693,21 @@ function Content() {
     setOptimizeResult(null);
     try {
       const result = await backend.repairDrifted();
+      if (disposedRef.current) return;
       ingestAggregateResult(result);
       if (result.reconnected) {
         await new Promise((r) => setTimeout(r, RECONNECT_DELAY));
+        if (disposedRef.current) return;
       }
     } catch (e) {
+      if (disposedRef.current) return;
       console.error("repair drifted error", e);
       setActionError("Couldn't repair drifted settings. Please try again.");
     } finally {
-      await refreshStatus(true);
-      setBusy(false);
+      if (!disposedRef.current) {
+        await refreshStatus(true);
+        setBusy(false);
+      }
     }
   };
 
@@ -624,6 +720,7 @@ function Content() {
     setActionWarnings(null);
     try {
       const result = await backend.resetSettings();
+      if (disposedRef.current) return;
       const errs = result.errors ?? [];
       if (errs.length) {
         // Non-empty errors[] (possibly with success False) is a warning,
@@ -633,11 +730,14 @@ function Content() {
         setActionError(result.message ?? "Reset failed. Please try again.");
       }
     } catch (e) {
+      if (disposedRef.current) return;
       console.error("reset error", e);
       setActionError("Reset failed. Please try again.");
     } finally {
-      await refreshStatus(true);
-      setBusy(false);
+      if (!disposedRef.current) {
+        await refreshStatus(true);
+        setBusy(false);
+      }
     }
   };
 
@@ -666,6 +766,7 @@ function Content() {
     const r = await handleToggle("dns", () =>
       backend.setDns(true, provider, servers)
     );
+    if (disposedRef.current) return;
     if (r?.success) {
       dropDnsDraft();
     }
@@ -687,6 +788,7 @@ function Content() {
 
     try {
       const res = await backend.startBackendSwitch(target);
+      if (disposedRef.current) return;
       if (!res.accepted) {
         setErrors((prev) => ({
           ...prev,
@@ -708,6 +810,7 @@ function Content() {
       });
       beginBackendPoll();
     } catch (e) {
+      if (disposedRef.current) return;
       setBusy(false);
       setErrors((prev) => ({
         ...prev,
@@ -735,6 +838,7 @@ function Content() {
     setUpdating(true);
     try {
       const r = await backend.applyUpdate();
+      if (disposedRef.current) return;
       if (r && !r.success) {
         setUpdating(false);
         setUpdateError(r.message ?? "Update failed. Please try again.");
@@ -744,6 +848,7 @@ function Content() {
     } catch {
       // A genuine pre-launch failure surfaces here. A restart-kill after a
       // successful launch clears when the panel reloads.
+      if (disposedRef.current) return;
       setUpdating(false);
       setUpdateError(
         "Update failed. Try again, or reinstall manually from Konsole."
@@ -757,11 +862,13 @@ function Content() {
     lastUpdateCheckAtRef.current = Date.now();
     try {
       const result = await backend.checkForUpdate();
+      if (disposedRef.current) return;
       setUpdateInfo(result);
       if (result && !result.success) {
         setUpdateError(result.message ?? "Couldn't check for updates.");
       }
     } catch {
+      if (disposedRef.current) return;
       setUpdateError("Couldn't check for updates.");
     }
     setCheckingUpdate(false);
@@ -770,15 +877,18 @@ function Content() {
   const handleChannelChange = async (nextChannel: string) => {
     try {
       const r = await backend.setUpdateChannel(nextChannel);
+      if (disposedRef.current) return;
       if (r && !r.success) {
         setUpdateError(r.message ?? "Couldn't change update channel.");
       } else {
         setUpdateError(null);
       }
     } catch {
+      if (disposedRef.current) return;
       setUpdateError("Couldn't change update channel.");
     }
     setUpdateInfo(null);
+    if (disposedRef.current) return;
     await refreshStatus();
   };
 
@@ -813,9 +923,15 @@ function Content() {
   const unknownOwners = status?.unknown_owners ?? [];
   const isDeckLcd = s?.device_family === "deck_lcd";
   // Mutation lock: normal busy state plus a stuck backend-switch poll
-  // failure (backendSwitch.error), which holds controls until the next
-  // successful getBackendSwitchStatus reconciles. No retry timers.
+  // failure (backendSwitch.error), which holds controls until a Retry click
+  // or the next successful getBackendSwitchStatus reconciles. No retry timers.
   const mutationLocked = isBusy || backendSwitch?.error != null;
+  // Retry affordance (D4): the error lock never deadlocks its own retry,
+  // while busy/in-flight work still blocks everything else.
+  const canRetry =
+    backendSwitch?.error != null &&
+    !backendSwitch?.in_progress &&
+    !isBusy;
 
   // Check if all safe optimizations are already active
   const allSafeActive =
@@ -1187,6 +1303,7 @@ function Content() {
             backendSwitch={backendSwitch}
             error={errors.wifi_backend ?? backendSwitch?.error}
             isBusy={mutationLocked}
+            canRetry={canRetry}
             onToggle={handleBackendToggle}
             onRetry={handleBackendRetry}
           />
@@ -1232,12 +1349,17 @@ function Content() {
 
 export default definePlugin(() => {
   let gameLifetimeUnsub: { unregister(): void } | null = null;
+  // Reapply timer id + disposed flag (D5): no volatile reapply or state
+  // touch after dismount.
+  let reapplyTimer: ReturnType<typeof setTimeout> | null = null;
+  let reapplyDisposed = false;
 
   try {
     gameLifetimeUnsub = SteamClient.GameSessions.RegisterForAppLifetimeNotifications(
       (notification: { bRunning: boolean }) => {
         if (notification.bRunning) {
-          setTimeout(() => {
+          reapplyTimer = setTimeout(() => {
+            if (reapplyDisposed) return;
             backend.reapplyVolatile().catch(() => {});
           }, 3000);
         }
@@ -1257,6 +1379,11 @@ export default definePlugin(() => {
     ),
     icon: <FaWifi />,
     onDismount() {
+      reapplyDisposed = true;
+      if (reapplyTimer) {
+        clearTimeout(reapplyTimer);
+        reapplyTimer = null;
+      }
       gameLifetimeUnsub?.unregister();
     },
   };
