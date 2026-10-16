@@ -127,7 +127,9 @@ shapes. The current frontend ignores unknown keys; rendering stays with ST0-014.
   gains no snapshot role; capture happens exclusively in `main.py` setters.
 - **D9 — transfer-clear consults the snapshot.** Clearing the previous owner
   profile on transfer restores that profile's snapshotted prior value when
-  present, else the assumed default. (Refines the ST0-005/006 transfer rule;
+  present, else the assumed default. Transfer-clear failures use the existing
+  `transfer_warnings: list[str]` channel (`"key: stderr"` entries, empty when
+  clean — ST0-005/006 shape, unchanged). (Refines the ST0-005/006 transfer rule;
   no owner-model change.)
 - **D10 — truthful restore results.** Every restore step checks its result via
   `_restore_slot` (returns `None` or an error string); failures are logged and
