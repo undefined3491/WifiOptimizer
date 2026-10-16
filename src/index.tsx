@@ -41,6 +41,10 @@ import { theme } from "./theme";
 const REFRESH_INTERVAL = 3000;
 const RECONNECT_DELAY = 4000;
 const BACKEND_POLL_INTERVAL = 750;
+// Bounded backend-switch poll (D4): 40 ticks x 750ms = 30s. Past this an
+// in_progress switch is parked as unknown (outcome unknowable, controls
+// stay excluded) instead of spinning forever.
+const BACKEND_POLL_MAX_TICKS = 40;
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
 const UPDATE_CHECK_DEDUPE_MS = 60 * 1000;
 const UPDATE_TIMEOUT_MS = 60 * 1000;
@@ -115,6 +119,16 @@ function Content() {
   const [applyingAll, setApplyingAll] = useState(false);
   const [optimizeResult, setOptimizeResult] = useState<OptimizeSafeResult | null>(null);
   const [customDnsInput, setCustomDnsInput] = useState("");
+  // DNS draft/applied split (ST0-012/015, D3): the provider dropdown and
+  // the custom field edit the draft only. Applied values stay read-only
+  // in status.settings.*. providerDraft null = follow applied.
+  const [dnsProviderDraft, setDnsProviderDraft] = useState<string | null>(null);
+  const [dnsAddressesDraft, setDnsAddressesDraft] = useState("");
+  const [dnsDirty, setDnsDirty] = useState(false);
+  const [dnsFocused, setDnsFocused] = useState(false);
+  // Local empty-custom validation error. Rendered with the field mounted
+  // so an error never hides the only way to fix it.
+  const [dnsDraftError, setDnsDraftError] = useState<string | null>(null);
   // Visible action outcomes: rejections land in actionError; transfer
   // warnings, setter errors[] and reset errors[] land in actionWarnings.
   const [actionError, setActionError] = useState<string | null>(null);
@@ -142,6 +156,20 @@ function Content() {
   const prevConnectedRef = useRef<boolean | null>(null);
   const statusRef = useRef<PluginStatus | null>(null);
   const lastUpdateCheckAtRef = useRef<number>(0);
+  // Ref mirrors for the guarded DNS refresh (D3): refreshStatus is a
+  // stable callback, so it reads these instead of closing over state.
+  const dnsProviderDraftRef = useRef<string | null>(null);
+  const dnsDirtyRef = useRef(false);
+  const dnsFocusedRef = useRef(false);
+  // Dismount safety (D5): set once on unmount; every async continuation
+  // below returns early when set, so no timer or in-flight promise touches
+  // state or IPC after dismount.
+  const disposedRef = useRef(false);
+  // Bounded poll lifecycle (D4): consecutive in_progress ticks, in-flight
+  // overlap flag, and remaining reject-retry budget (one extra attempt).
+  const backendPollTicksRef = useRef(0);
+  const backendPollInFlightRef = useRef(false);
+  const backendPollRetriesRef = useRef(0);
 
   const setBusy = useCallback((val: boolean) => {
     busyRef.current = val;
@@ -158,6 +186,7 @@ function Content() {
     }
     lastUpdateCheckAtRef.current = now;
     backend.checkForUpdate().then((r) => {
+      if (disposedRef.current) return;
       setUpdateInfo(r);
       if (r && !r.success) {
         setUpdateError(r.message ?? "Couldn't check for updates.");
@@ -165,6 +194,7 @@ function Content() {
         setUpdateError(null);
       }
     }).catch(() => {
+      if (disposedRef.current) return;
       setUpdateError("Couldn't check for updates.");
     });
   }, []);
@@ -176,6 +206,7 @@ function Content() {
     if (!force && busyRef.current) return;
     try {
       const s = await backend.getStatus();
+      if (disposedRef.current) return;
       if (s && s.success !== false) {
         statusRef.current = s;
         setStatus(s);
@@ -183,8 +214,13 @@ function Content() {
         setIsStale(false);
         setStatusAt(Date.now());
         if (s.settings) {
-          if (s.settings.dns_provider === "custom") {
-            setCustomDnsInput(s.settings.dns_servers || "");
+          // Guarded refresh (D3): polling must never eat keystrokes. The
+          // applied mirror updates only when no draft is pending, nothing
+          // was typed, and the field isn't focused.
+          if (!dnsDirtyRef.current && !dnsFocusedRef.current && dnsProviderDraftRef.current === null) {
+            if (s.settings.dns_provider === "custom") {
+              setCustomDnsInput(s.settings.dns_servers || "");
+            }
           }
         }
       } else {
@@ -193,6 +229,7 @@ function Content() {
         if (statusRef.current) setIsStale(true);
       }
     } catch (e) {
+      if (disposedRef.current) return;
       console.error("WiFi Optimizer TMS: failed to get status", e);
       setStatusError("Couldn't reach the plugin. It may still be loading.");
       if (statusRef.current) setIsStale(true);
@@ -208,10 +245,40 @@ function Content() {
 
   const beginBackendPoll = useCallback(() => {
     stopBackendPoll();
+    backendPollTicksRef.current = 0;
+    backendPollRetriesRef.current = 0;
+    backendPollInFlightRef.current = false;
     backendPollRef.current = setInterval(async () => {
+      // Overlap guard (D4): skip the tick when a poll is in flight.
+      if (backendPollInFlightRef.current) return;
+      backendPollInFlightRef.current = true;
       try {
         const s = await backend.getBackendSwitchStatus();
+        if (disposedRef.current) return;
+        // Any answered poll resets the reject-retry budget.
+        backendPollRetriesRef.current = 0;
         if (s.in_progress) {
+          backendPollTicksRef.current += 1;
+          if (backendPollTicksRef.current >= BACKEND_POLL_MAX_TICKS) {
+            // Tick bound (D4): stop spinning and park as unknown. The
+            // phase/in_progress combo (switching phase, no poll in flight)
+            // renders the row's unknown representation; the error preserves
+            // the exclusion until a Retry reconciles.
+            stopBackendPoll();
+            await refreshStatus(true);
+            if (disposedRef.current) return;
+            setBackendSwitch({
+              success: false,
+              in_progress: false,
+              phase: "switching",
+              target: s.target ?? null,
+              started_at: s.started_at ?? 0,
+              result: null,
+              error: "The backend switch is taking too long and its outcome is unknown. Retry the switch.",
+            });
+            setBusy(false);
+            return;
+          }
           // Mid-switch: update so the subtitle can show the current phase.
           setBackendSwitch(s);
           return;
@@ -228,17 +295,33 @@ function Content() {
             ...prev,
             wifi_backend: s.result!.message! + detail,
           }));
+        } else if (!s.result || s.result.success) {
+          // Reconciliation (D4): a successful terminal status clears a
+          // stale row error; replacing backendSwitch below clears the lock.
+          setErrors((prev) => {
+            const next = { ...prev };
+            delete next.wifi_backend;
+            return next;
+          });
         }
         await refreshStatus(true);
+        if (disposedRef.current) return;
         setBackendSwitch(s);
         setBusy(false);
       } catch (e) {
+        if (disposedRef.current) return;
+        // Bounded retry (D4): one extra attempt at the same interval, then
+        // the existing error+lock.
+        if (backendPollRetriesRef.current < 1) {
+          backendPollRetriesRef.current += 1;
+          return;
+        }
         stopBackendPoll();
         setBusy(false);
         console.error("backend switch poll error", e);
         // Poll rejection: clear in-flight state but keep mutation controls
-        // locked via an additive error until the next successful
-        // getBackendSwitchStatus reconciles (no retry timers).
+        // locked via an additive error until a Retry click or the next
+        // successful getBackendSwitchStatus reconciles (no retry timers).
         setBackendSwitch((prev) => ({
           success: false,
           in_progress: false,
@@ -248,6 +331,8 @@ function Content() {
           result: prev?.result ?? null,
           error: "Lost contact with the backend switch. Reopen the panel or start a new switch.",
         }));
+      } finally {
+        backendPollInFlightRef.current = false;
       }
     }, BACKEND_POLL_INTERVAL);
   }, [refreshStatus, setBusy]);
@@ -292,6 +377,7 @@ function Content() {
     backend
       .getBackendSwitchStatus()
       .then((s) => {
+        if (disposedRef.current) return;
         if (s.in_progress) {
           setBackendSwitch(s);
           setBusy(true);
@@ -303,9 +389,18 @@ function Content() {
       })
       .catch(() => {});
     return () => {
-      if (backendPollRef.current) clearInterval(backendPollRef.current);
+      stopBackendPoll();
     };
   }, [beginBackendPoll, runUpdateCheck, setBusy]);
+
+  // Dismount safety (D5): flag every async continuation checks, and null
+  // the poll ref via stopBackendPoll above, so a launch→dismount→fire
+  // path performs zero IPC and zero setState.
+  useEffect(() => {
+    return () => {
+      disposedRef.current = true;
+    };
+  }, []);
 
   // Retry update check when connectivity recovers. The initial one-shot check
   // in the mount effect misses the case where the panel was already open when
@@ -370,13 +465,25 @@ function Content() {
     };
   }, [runUpdateCheck]);
 
+  // Ref mirrors for the guarded DNS refresh (D3). refreshStatus reads
+  // the refs so it stays a stable callback while drafts change.
+  useEffect(() => {
+    dnsProviderDraftRef.current = dnsProviderDraft;
+  }, [dnsProviderDraft]);
+  useEffect(() => {
+    dnsDirtyRef.current = dnsDirty;
+  }, [dnsDirty]);
+  useEffect(() => {
+    dnsFocusedRef.current = dnsFocused;
+  }, [dnsFocused]);
+
   // ---- User action handlers ----
   //
   // Generic toggle handler used by every setter toggle (power_save, BSSID,
   // auto_fix, buffer_tuning, band_preference, DNS, IPv6) and by the Force
   // Reapply All button. Takes a key for error tracking and a backend fn.
-  const handleToggle = async (key: string, fn: () => Promise<MethodResult>) => {
-    if (busyRef.current) return;
+  const handleToggle = async (key: string, fn: () => Promise<MethodResult>): Promise<MethodResult | null> => {
+    if (busyRef.current) return null;
     setBusy(true);
     setActionError(null);
     setActionWarnings(null);
@@ -389,6 +496,7 @@ function Content() {
 
     try {
       const result = await fn();
+      if (disposedRef.current) return null;
       if (!result.success) {
         const detail = result.detail ? ` (${result.detail})` : "";
         const msg = (result.message ?? ERROR_MESSAGES[result.error ?? ""] ?? "Unknown error") + detail;
@@ -412,16 +520,23 @@ function Content() {
       // Wait for WiFi to reconnect before refreshing status
       if (result.reconnected) {
         await new Promise((r) => setTimeout(r, RECONNECT_DELAY));
+        if (disposedRef.current) return null;
       }
+      return result;
     } catch (e) {
+      if (disposedRef.current) return null;
       console.error(`WiFi Optimizer TMS: toggle ${key} failed`, e);
       setErrors((prev) => ({ ...prev, [key]: "Request failed. Please try again." }));
+      return null;
     } finally {
       // Refresh before clearing busy so toggles/badges don't briefly flip to
       // stale pre-operation values in the interim render. Refresh runs even on
-      // unexpected errors to keep UI consistent with backend state.
-      await refreshStatus(true);
-      setBusy(false);
+      // unexpected errors to keep UI consistent with backend state. Skipped
+      // after dismount: zero IPC, zero setState (D5).
+      if (!disposedRef.current) {
+        await refreshStatus(true);
+        setBusy(false);
+      }
     }
   };
 
@@ -435,6 +550,7 @@ function Content() {
     setOptimizeResult(null);
     try {
       const result = await backend.optimizeSafe();
+      if (disposedRef.current) return;
       setOptimizeResult(result);
       if (result.results) {
         const newErrors: Record<string, string> = {};
@@ -474,23 +590,71 @@ function Content() {
       // optimize_safe contains BSSID lock which reconnects
       if (result.reconnected) {
         await new Promise((r) => setTimeout(r, RECONNECT_DELAY));
+        if (disposedRef.current) return;
       }
     } catch (e) {
+      if (disposedRef.current) return;
       console.error("optimize error", e);
       setActionError("Couldn't apply optimizations. Please try again.");
     } finally {
       // Refresh before clearing applyingAll so button doesn't briefly flip to
-      // "All good" from stale status. Refresh runs on errors too.
-      await refreshStatus(true);
-      setBusy(false);
-      setApplyingAll(false);
+      // "All good" from stale status. Refresh runs on errors too. Skipped
+      // after dismount (D5).
+      if (!disposedRef.current) {
+        await refreshStatus(true);
+        setBusy(false);
+        setApplyingAll(false);
+      }
     }
+  };
+
+  // Shared aggregate ingestion for Force Reapply and Fix-now (D1): each
+  // failed child maps to its existing errors[child] key, the shared banner
+  // shows applied/total/failed, and total==0 renders the result message
+  // ("No drifted settings" for repair, "No optimizations enabled" for
+  // reapply). The old "reapply" error key is retired since no row renders it.
+  const ingestAggregateResult = (result: OptimizeSafeResult) => {
+    setOptimizeResult(result);
+    const childKeys = Object.keys(result.results ?? {});
+    const newErrors: Record<string, string> = {};
+    for (const [k, v] of Object.entries(result.results ?? {})) {
+      if (!v.success) {
+        const det = v.detail ? ` (${v.detail})` : "";
+        newErrors[k] = (v.message ?? ERROR_MESSAGES[v.error ?? ""] ?? "Failed") + det;
+      }
+    }
+    setErrors((prev) => {
+      const next = { ...prev };
+      for (const k of childKeys) delete next[k];
+      return { ...next, ...newErrors };
+    });
+    const warnings: string[] = [];
+    for (const v of Object.values(result.results ?? {})) {
+      if (v.transfer_warnings) warnings.push(...v.transfer_warnings);
+      if (v.errors) warnings.push(...v.errors);
+    }
+    const failedStages: string[] = [];
+    let anyUnverified = false;
+    for (const v of Object.values(result.results ?? {})) {
+      const rc = v.reconnect;
+      if (rc?.attempted && !rc.verified) {
+        anyUnverified = true;
+        for (const [name, st] of Object.entries(rc.stages ?? {})) {
+          if (st && !st.ok) failedStages.push(name);
+        }
+      }
+    }
+    if (anyUnverified) {
+      warnings.push(
+        `WiFi reconnect not verified${failedStages.length ? ` (${failedStages.join(", ")})` : ""}. Settings were saved; toggle WiFi off/on if needed.`
+      );
+    }
+    if (warnings.length) setActionWarnings(warnings);
   };
 
   // Force Reapply has its own handler (not handleToggle): each failed
   // child maps to its existing errors[child] key, the shared banner shows
-  // applied/total/failed, and total==0 renders as info. The old "reapply"
-  // error key is retired since no row renders it.
+  // applied/total/failed, and total==0 renders as info.
   const handleForceReapply = async () => {
     if (busyRef.current) return;
     setBusy(true);
@@ -499,51 +663,52 @@ function Content() {
     setOptimizeResult(null);
     try {
       const result = await backend.reapplyAll();
-      setOptimizeResult(result);
-      const childKeys = Object.keys(result.results ?? {});
-      const newErrors: Record<string, string> = {};
-      for (const [k, v] of Object.entries(result.results ?? {})) {
-        if (!v.success) {
-          const det = v.detail ? ` (${v.detail})` : "";
-          newErrors[k] = (v.message ?? ERROR_MESSAGES[v.error ?? ""] ?? "Failed") + det;
-        }
-      }
-      setErrors((prev) => {
-        const next = { ...prev };
-        for (const k of childKeys) delete next[k];
-        return { ...next, ...newErrors };
-      });
-      const warnings: string[] = [];
-      for (const v of Object.values(result.results ?? {})) {
-        if (v.transfer_warnings) warnings.push(...v.transfer_warnings);
-        if (v.errors) warnings.push(...v.errors);
-      }
-      const failedStages: string[] = [];
-      let anyUnverified = false;
-      for (const v of Object.values(result.results ?? {})) {
-        const rc = v.reconnect;
-        if (rc?.attempted && !rc.verified) {
-          anyUnverified = true;
-          for (const [name, st] of Object.entries(rc.stages ?? {})) {
-            if (st && !st.ok) failedStages.push(name);
-          }
-        }
-      }
-      if (anyUnverified) {
-        warnings.push(
-          `WiFi reconnect not verified${failedStages.length ? ` (${failedStages.join(", ")})` : ""}. Settings were saved; toggle WiFi off/on if needed.`
-        );
-      }
-      if (warnings.length) setActionWarnings(warnings);
+      if (disposedRef.current) return;
+      ingestAggregateResult(result);
       if (result.reconnected) {
         await new Promise((r) => setTimeout(r, RECONNECT_DELAY));
+        if (disposedRef.current) return;
       }
     } catch (e) {
+      if (disposedRef.current) return;
       console.error("force reapply error", e);
       setActionError("Force reapply failed. Please try again.");
     } finally {
-      await refreshStatus(true);
-      setBusy(false);
+      if (!disposedRef.current) {
+        await refreshStatus(true);
+        setBusy(false);
+      }
+    }
+  };
+
+  // Fix-now repair (ST0-011, D1): re-applies only enabled-and-drifted
+  // settings via repair_drifted. One busy window, child→errors[child]
+  // mapping, a single RECONNECT_DELAY on result.reconnected, and a forced
+  // refresh before busy-clear. A top-level rejection lands in the same
+  // visible actionError as other aggregate handlers.
+  const handleRepair = async () => {
+    if (busyRef.current) return;
+    setBusy(true);
+    setActionError(null);
+    setActionWarnings(null);
+    setOptimizeResult(null);
+    try {
+      const result = await backend.repairDrifted();
+      if (disposedRef.current) return;
+      ingestAggregateResult(result);
+      if (result.reconnected) {
+        await new Promise((r) => setTimeout(r, RECONNECT_DELAY));
+        if (disposedRef.current) return;
+      }
+    } catch (e) {
+      if (disposedRef.current) return;
+      console.error("repair drifted error", e);
+      setActionError("Couldn't repair drifted settings. Please try again.");
+    } finally {
+      if (!disposedRef.current) {
+        await refreshStatus(true);
+        setBusy(false);
+      }
     }
   };
 
@@ -556,6 +721,7 @@ function Content() {
     setActionWarnings(null);
     try {
       const result = await backend.resetSettings();
+      if (disposedRef.current) return;
       const errs = result.errors ?? [];
       if (errs.length) {
         // Non-empty errors[] (possibly with success False) is a warning,
@@ -565,11 +731,45 @@ function Content() {
         setActionError(result.message ?? "Reset failed. Please try again.");
       }
     } catch (e) {
+      if (disposedRef.current) return;
       console.error("reset error", e);
       setActionError("Reset failed. Please try again.");
     } finally {
-      await refreshStatus(true);
-      setBusy(false);
+      if (!disposedRef.current) {
+        await refreshStatus(true);
+        setBusy(false);
+      }
+    }
+  };
+
+  // Drop all three DNS draft fields without IPC (D3 Cancel, and the
+  // pre-toggle reset so the main on/off toggle never sends a raw draft).
+  const dropDnsDraft = () => {
+    setDnsProviderDraft(null);
+    setDnsAddressesDraft("");
+    setDnsDirty(false);
+    setDnsDraftError(null);
+  };
+
+  // DNS Apply (D3): custom-only validation, then a single toggle. Presets
+  // submit their stored servers; a stale draftAddresses is ignored for
+  // non-custom. Success clears all three draft fields. Backend rejections
+  // land in errors.dns via handleToggle (the last reporting line).
+  const handleDnsApply = async () => {
+    const applied = status?.settings;
+    const provider = dnsProviderDraft ?? applied?.dns_provider ?? "cloudflare";
+    if (provider === "custom" && !dnsAddressesDraft.trim()) {
+      setDnsDraftError("Enter at least one DNS server address.");
+      return;
+    }
+    setDnsDraftError(null);
+    const servers = provider === "custom" ? dnsAddressesDraft : "";
+    const r = await handleToggle("dns", () =>
+      backend.setDns(true, provider, servers)
+    );
+    if (disposedRef.current) return;
+    if (r?.success) {
+      dropDnsDraft();
     }
   };
 
@@ -589,6 +789,7 @@ function Content() {
 
     try {
       const res = await backend.startBackendSwitch(target);
+      if (disposedRef.current) return;
       if (!res.accepted) {
         setErrors((prev) => ({
           ...prev,
@@ -610,6 +811,7 @@ function Content() {
       });
       beginBackendPoll();
     } catch (e) {
+      if (disposedRef.current) return;
       setBusy(false);
       setErrors((prev) => ({
         ...prev,
@@ -637,6 +839,7 @@ function Content() {
     setUpdating(true);
     try {
       const r = await backend.applyUpdate();
+      if (disposedRef.current) return;
       if (r && !r.success) {
         setUpdating(false);
         setUpdateError(r.message ?? "Update failed. Please try again.");
@@ -646,6 +849,7 @@ function Content() {
     } catch {
       // A genuine pre-launch failure surfaces here. A restart-kill after a
       // successful launch clears when the panel reloads.
+      if (disposedRef.current) return;
       setUpdating(false);
       setUpdateError(
         "Update failed. Try again, or reinstall manually from Konsole."
@@ -659,27 +863,33 @@ function Content() {
     lastUpdateCheckAtRef.current = Date.now();
     try {
       const result = await backend.checkForUpdate();
+      if (disposedRef.current) return;
       setUpdateInfo(result);
       if (result && !result.success) {
         setUpdateError(result.message ?? "Couldn't check for updates.");
       }
     } catch {
+      if (disposedRef.current) return;
       setUpdateError("Couldn't check for updates.");
     }
+    if (disposedRef.current) return;
     setCheckingUpdate(false);
   };
 
   const handleChannelChange = async (nextChannel: string) => {
     try {
       const r = await backend.setUpdateChannel(nextChannel);
+      if (disposedRef.current) return;
       if (r && !r.success) {
         setUpdateError(r.message ?? "Couldn't change update channel.");
       } else {
         setUpdateError(null);
       }
     } catch {
+      if (disposedRef.current) return;
       setUpdateError("Couldn't change update channel.");
     }
+    if (disposedRef.current) return;
     setUpdateInfo(null);
     await refreshStatus();
   };
@@ -715,9 +925,15 @@ function Content() {
   const unknownOwners = status?.unknown_owners ?? [];
   const isDeckLcd = s?.device_family === "deck_lcd";
   // Mutation lock: normal busy state plus a stuck backend-switch poll
-  // failure (backendSwitch.error), which holds controls until the next
-  // successful getBackendSwitchStatus reconciles. No retry timers.
+  // failure (backendSwitch.error), which holds controls until a Retry click
+  // or the next successful getBackendSwitchStatus reconciles. No retry timers.
   const mutationLocked = isBusy || backendSwitch?.error != null;
+  // Retry affordance (D4): the error lock never deadlocks its own retry,
+  // while busy/in-flight work still blocks everything else.
+  const canRetry =
+    backendSwitch?.error != null &&
+    !backendSwitch?.in_progress &&
+    !isBusy;
 
   // Check if all safe optimizations are already active
   const allSafeActive =
@@ -786,7 +1002,7 @@ function Content() {
           {driftCount} setting{driftCount > 1 ? "s" : ""} drifted after wake.{" "}
           <span
             style={{ textDecoration: "underline", cursor: "pointer" }}
-            onClick={handleOptimize}
+            onClick={handleRepair}
           >
             Fix now
           </span>
@@ -878,7 +1094,7 @@ function Content() {
               : "success";
         const text =
           optimizeResult.total === 0
-            ? "No optimizations enabled"
+            ? (optimizeResult.message ?? "No optimizations enabled")
             : failed > 0
               ? `${optimizeResult.applied}/${optimizeResult.total} applied (${failed} failed)`
               : "All applied";
@@ -976,15 +1192,18 @@ function Content() {
           label="Custom DNS"
           subtitle="Override DNS servers for this network"
           explanation="Your internet provider's DNS servers translate domain names into IP addresses. They can be slow or unreliable. Switching to a public DNS like Cloudflare (1.1.1.1) or Google (8.8.8.8) can speed up initial connections and improve reliability. This only affects the current WiFi network."
-          {...getBadge(undefined, status, errors.dns ?? null)}
+          {...getBadge("dns", status, errors.dns ?? null)}
           checked={s?.dns_enabled ?? false}
           disabled={mutationLocked || (!connected && !s?.dns_enabled)}
           error={errors.dns}
-          onChange={(val: boolean) =>
-            handleToggle("dns", () =>
-              backend.setDns(val, s?.dns_provider ?? "cloudflare", customDnsInput)
-            )
-          }
+          onChange={(val: boolean) => {
+            // Main toggle uses applied values and drops pending drafts,
+            // never the raw draft (D3).
+            const ap = s?.dns_provider ?? "cloudflare";
+            const as = s?.dns_servers ?? "";
+            dropDnsDraft();
+            handleToggle("dns", () => backend.setDns(val, ap, as));
+          }}
         >
           {s?.dns_enabled && (
             <>
@@ -992,31 +1211,65 @@ function Content() {
                 <DropdownItem
                   label="DNS Provider"
                   rgOptions={DNS_OPTIONS}
-                  selectedOption={s?.dns_provider ?? "cloudflare"}
+                  selectedOption={dnsProviderDraft ?? s?.dns_provider ?? "cloudflare"}
+                  disabled={mutationLocked}
                   onChange={(option: { data: string }) => {
-                    const custom = option.data === "custom" ? customDnsInput : "";
-                    handleToggle("dns", () =>
-                      backend.setDns(true, option.data, custom)
-                    );
+                    // Draft only: never submits (D3). Switching to Custom
+                    // mounts the field prefilled from applied servers.
+                    setDnsDraftError(null);
+                    setDnsProviderDraft(option.data);
+                    if (option.data === "custom") {
+                      setDnsAddressesDraft(customDnsInput || s?.dns_servers || "");
+                    }
+                    setDnsDirty(false);
                   }}
                 />
               </PanelSectionRow>
-              {s?.dns_provider === "custom" && (
+              {(dnsProviderDraft ?? s?.dns_provider) === "custom" && (
                 <PanelSectionRow>
                   <TextField
                     label="DNS servers (space-separated)"
-                    value={customDnsInput}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                      setCustomDnsInput(e.target.value)
-                    }
-                    onBlur={() => {
-                      if (customDnsInput) {
-                        handleToggle("dns", () =>
-                          backend.setDns(true, "custom", customDnsInput)
-                        );
-                      }
+                    value={dnsProviderDraft !== null ? dnsAddressesDraft : customDnsInput}
+                    disabled={mutationLocked}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                      // Typing adopts/updates the draft and marks it dirty;
+                      // never submits (D3).
+                      if (dnsProviderDraft === null) setDnsProviderDraft("custom");
+                      setDnsAddressesDraft(e.target.value);
+                      setDnsDirty(true);
                     }}
+                    onFocus={() => setDnsFocused(true)}
+                    onBlur={() => setDnsFocused(false)}
                   />
+                </PanelSectionRow>
+              )}
+              {dnsDraftError && (
+                <PanelSectionRow>
+                  <div style={{ fontSize: theme.fontSize.small, color: theme.error.text }}>
+                    {dnsDraftError}
+                  </div>
+                </PanelSectionRow>
+              )}
+              {dnsProviderDraft !== null && (
+                <PanelSectionRow>
+                  <ButtonItem
+                    layout="below"
+                    disabled={mutationLocked}
+                    onClick={handleDnsApply}
+                  >
+                    Apply DNS
+                  </ButtonItem>
+                </PanelSectionRow>
+              )}
+              {dnsProviderDraft !== null && (
+                <PanelSectionRow>
+                  <ButtonItem
+                    layout="below"
+                    disabled={mutationLocked}
+                    onClick={dropDnsDraft}
+                  >
+                    Cancel
+                  </ButtonItem>
                 </PanelSectionRow>
               )}
             </>
@@ -1052,6 +1305,7 @@ function Content() {
             backendSwitch={backendSwitch}
             error={errors.wifi_backend ?? backendSwitch?.error}
             isBusy={mutationLocked}
+            canRetry={canRetry}
             onToggle={handleBackendToggle}
             onRetry={handleBackendRetry}
           />
@@ -1097,12 +1351,17 @@ function Content() {
 
 export default definePlugin(() => {
   let gameLifetimeUnsub: { unregister(): void } | null = null;
+  // Reapply timer id + disposed flag (D5): no volatile reapply or state
+  // touch after dismount.
+  let reapplyTimer: ReturnType<typeof setTimeout> | null = null;
+  let reapplyDisposed = false;
 
   try {
     gameLifetimeUnsub = SteamClient.GameSessions.RegisterForAppLifetimeNotifications(
       (notification: { bRunning: boolean }) => {
         if (notification.bRunning) {
-          setTimeout(() => {
+          reapplyTimer = setTimeout(() => {
+            if (reapplyDisposed) return;
             backend.reapplyVolatile().catch(() => {});
           }, 3000);
         }
@@ -1122,6 +1381,11 @@ export default definePlugin(() => {
     ),
     icon: <FaWifi />,
     onDismount() {
+      reapplyDisposed = true;
+      if (reapplyTimer) {
+        clearTimeout(reapplyTimer);
+        reapplyTimer = null;
+      }
       gameLifetimeUnsub?.unregister();
     },
   };

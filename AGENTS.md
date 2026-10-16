@@ -57,7 +57,7 @@ Decky plugin (Steam Deck / handhelds): React TS frontend + Python backend (runs 
 ## Gotchas
 
 - Backend shell-outs use absolute paths (`/usr/bin/nmcli`, `/usr/bin/iw`, `/usr/bin/sysctl`, …). `main.py` has a `decky` fallback to `/tmp/wifi-optimizer` for off-Deck static analysis. Do not call setters or lifecycle hooks on Windows: some write files even if Linux tools are unavailable. Use static checks locally and verify actual WiFi behavior on a supported Linux device.
-- `get_status()` has side effects: it saves the last connection UUID, raises its autoconnect priority, and repairs drifted IPv6/band profile values. Do not treat it as a strictly read-only diagnostic call.
+- `get_status()` is read-only since ST0-005/006: it reports `live` + boolean `drift` (plus additive `unknown_owners`) and never writes settings or NM profiles. Repair of drifted values happens only through explicit setter/repair paths.
 - Pass `clean_env=True` to `_run_cmd` for `curl`/`bash` children: strips `LD_LIBRARY_PATH` so they use system libs instead of Decky's PyInstaller-bundled ones (avoids OpenSSL/readline symbol errors).
 - Apply order matters (`_main`): buffer tuning (`txqueuelen 2000`) → CAKE (overrides `txqueuelen` to `256`) → power save last. Uninstall restores `txqueuelen 1000` + `SYSCTL_DEFAULTS`. Keep `SYSCTL_PARAMS`, driver sysfs paths, and the dispatcher template in sync when changing values.
 - Enablers requiring live BSSID need active WiFi (`_require_wifi`); disablers should use `_resolve_uuid()` so they work on saved profiles while disconnected.

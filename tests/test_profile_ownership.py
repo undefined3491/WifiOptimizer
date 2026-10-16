@@ -17,6 +17,9 @@ UUID_B = "UUID-B-2222"
 
 METHOD_NAMES = {
     "get_status",
+    "_compute_drift_flags",
+    "_parse_dns_ips",
+    "_is_dns_drifted",
     "set_bssid_lock",
     "set_band_preference",
     "set_dns",

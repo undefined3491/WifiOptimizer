@@ -1,7 +1,7 @@
 import { PanelSection, PanelSectionRow, ButtonItem } from "@decky/ui";
 import { theme } from "../theme";
 import * as backend from "../backend";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface PanelFooterProps {
   version: string;
@@ -11,6 +11,22 @@ export function PanelFooter({ version }: PanelFooterProps) {
   const [diagState, setDiagState] = useState<
     "idle" | "copying" | "done" | "saved" | "error"
   >("idle");
+  // Timeout ids (D5): cleared on unmount so no timer touches state late.
+  const timeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const disposedRef = useRef(false);
+  useEffect(() => {
+    return () => {
+      disposedRef.current = true;
+      for (const id of timeoutsRef.current) clearTimeout(id);
+      timeoutsRef.current = [];
+    };
+  }, []);
+  const laterIdle = (ms: number) => {
+    timeoutsRef.current.push(setTimeout(() => {
+      if (disposedRef.current) return;
+      setDiagState("idle");
+    }, ms));
+  };
   const rowStyle: React.CSSProperties = {
     fontSize: theme.fontSize.tiny,
     color: theme.text.dim,
@@ -20,6 +36,7 @@ export function PanelFooter({ version }: PanelFooterProps) {
     setDiagState("copying");
     try {
       const info = await backend.getDiagnosticInfo();
+      if (disposedRef.current) return;
       // Check the collection success flag before reporting done/saved.
       if (!info || (info as { success?: boolean }).success === false) {
         throw new Error("diagnostic collection failed");
@@ -27,19 +44,22 @@ export function PanelFooter({ version }: PanelFooterProps) {
       const text = JSON.stringify(info, null, 2);
       try {
         await navigator.clipboard.writeText(text);
+        if (disposedRef.current) return;
         setDiagState("done");
       } catch {
         const saved = await backend.saveDiagnosticInfo();
+        if (disposedRef.current) return;
         // Check the save success flag before reporting saved.
         if (!saved || (saved as { success?: boolean }).success === false) {
           throw new Error("diagnostic save failed");
         }
         setDiagState("saved");
       }
-      setTimeout(() => setDiagState("idle"), 5000);
+      laterIdle(5000);
     } catch {
+      if (disposedRef.current) return;
       setDiagState("error");
-      setTimeout(() => setDiagState("idle"), 3000);
+      laterIdle(3000);
     }
   };
 
