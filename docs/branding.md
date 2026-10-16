@@ -1,6 +1,6 @@
 # WiFi Optimizer TMS branding stages
 
-Recorded: 2026-10-16. The owner selected `WiFi Optimizer TMS` for the plugin and `wifi-optimizer-tms` for the package and future repository. Apply these names in small reviewed changes; publishing remains separate.
+Recorded: 2026-10-16. The owner selected `WiFi Optimizer TMS` for the plugin and `wifi-optimizer-tms` for the package and repository. Source branding and GitHub cutover are complete; device transition and publishing remain separate.
 
 | Stage | Scope | Status |
 | --- | --- | --- |
@@ -32,13 +32,13 @@ Run delivery-validator tests, frozen pnpm 9 installation, build, project type ch
 
 Stage 2 retains the existing branch/tag download protocol: main archive root `wifi-optimizer-tms-main`, Beta root `wifi-optimizer-tms-beta`, Stable `vX.Y.Z` tag archive root `wifi-optimizer-tms-X.Y.Z`. The manual release fixture uses the same version root. A SHA archive has a different root and must not be substituted for a version/branch fixture. Resolve/download pinning and recovery behavior remain proposed audit work, not fixes included in this rename.
 
-Before external rename, review the cutover PR and require successful `ci-required`. Rename the same fork, read back its canonical full name and unchanged node ID, update shared `origin` to `https://github.com/undefined3491/wifi-optimizer-tms.git`, and recheck the PR base/head and CI before squash merge. Then verify main CI and actual canonical main source archive. Local checkout folder names can remain unchanged. Existing linked worktrees share `origin`; unrelated clones need their own remote update. Record observed cutover results in the PR.
+Stage 2's rename, shared-origin update, review/CI and canonical archive verification are complete; observed results are recorded below. Local checkout folder names can remain unchanged. Existing linked worktrees share `origin`; unrelated clones need their own remote update. Do not repeat the rename or substitute display-name changes for device migration.
 
 [GitHub documents redirects and remote updates](https://docs.github.com/en/repositories/creating-and-managing-repositories/renaming-a-repository), checked 2026-10-16. Do not reuse the old repository name. Redirects do not repair an old updater's hardcoded archive root; legacy updater migration is not validated by a repository rename. Do not instruct the owner to reinstall/reset through the unresolved legacy flows to complete branding.
 
-The broader compatibility/recovery proposal remains under review in [PR #3](https://github.com/undefined3491/wifi-optimizer-tms/pull/3). Stage 3 follows reviewed installation/update and restoration fixes and [device validation](testing/steam-deck-lcd-stable.md). Stable requires a published release and Beta requires a deliberate `beta` branch; missing channels are not replaced with upstream downloads or created as rename fixtures.
+The broader compatibility records and conditional recovery proposal are documented through [PR #3](https://github.com/undefined3491/wifi-optimizer-tms/pull/3); merging preparation documentation does not approve that engine. Stage 3 follows reviewed installation/update and restoration fixes and [device validation](testing/steam-deck-lcd-stable.md). Stable requires a published release and Beta requires a deliberate `beta` branch; missing channels are not replaced with upstream downloads or created as rename fixtures.
 
-The [Stage 0 findings](audits/2026-10-15-stage-0-findings.md) remain open. Source branding does not establish migration safety, optimization benefit, reconnect/sleep-wake correctness or readiness for the first Stable release.
+See the [Stage 0 findings](audits/2026-10-15-stage-0-findings.md) for current correction status. Source branding does not establish migration safety, optimization benefit, reconnect/sleep-wake correctness or readiness for the first Stable release.
 
 ## Observed cutover result — 2026-10-16
 

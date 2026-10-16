@@ -31,6 +31,6 @@ Inspect the report locally before sharing it. Keep it outside the Git repository
 
 ## Follow-up
 
-Use the output to complete the [owner inventory](results/2026-10-15-owner-inventory.md). Record collection time, collector commit/hash and any concurrent reconnect/suspend or other changes. Keep raw local evidence separate from a concise reviewed result committed to `docs/testing/results/`.
+The first collection and separate runtime follow-up are recorded in the [device inventory](results/2026-10-16-owner-device-inventory.md). For a new evidence gap or changed system, record collection time, collector commit/hash and any concurrent reconnect/suspend or other changes. Keep raw local evidence separate from a concise reviewed result committed to `docs/testing/results/`.
 
-Inventory output does not authorize installation, resets or live failure injection. The [recovery design](../superpowers/specs/2026-10-15-delivery-recovery-design.md) proposes the next fix package; corrected runtime behavior and candidate-specific device validation remain pending.
+Inventory output does not authorize installation, resets or live failure injection. Follow the [current correction queue](../audits/2026-10-15-stage-0-findings.md#correction-order-and-stage-0-handoff) for the next source package; the [recovery design](../superpowers/specs/2026-10-15-delivery-recovery-design.md) remains conditional later work. Candidate-specific device validation is pending.

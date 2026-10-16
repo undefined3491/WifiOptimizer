@@ -74,4 +74,4 @@ Follow-up (2026-10-16): the [device inventory](../../testing/results/2026-10-16-
 
 ## Execution state
 
-The owner explicitly requested starting the audit with subagents using `gpt-6.1-sol`. This permits the read-only investigations above now. Product changes, hardware-dependent conclusions and the final Stage 0 gate are subsequent work; do not mark them complete from this plan or from CI alone.
+The owner-selected `gpt-6.1-sol` static audit and initial device inventory are complete. ST0-010 was corrected separately under its scoped plan; other fixes, recovery design selection and corrected-candidate device validation remain pending. Use the [continuation entry](../../audits/2026-10-15-stage-0.md#start-the-next-session) and [correction queue](../../audits/2026-10-15-stage-0-findings.md#correction-order-and-stage-0-handoff) for the next session. Do not repeat completed audit/collection tasks or mark Stage 0 complete from this plan or CI alone.

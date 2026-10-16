@@ -6,7 +6,7 @@ Date: 2026-10-15. Product baseline: `7e3d45f60504aa53b17155136535006b7bf1e634`; 
 
 ## Outcome and scope
 
-Correct ST0-001/002/003/018: downloading or copying a bad update must not destroy the existing installation, competing updates must not overlap, and service failure must not be presented as successful installation. Include the narrowly necessary operation reservation from ST0-010 and update-specific error/status handling. Do not claim full backend-switch, settings-restoration or networking correctness from this package.
+Correct ST0-001/002/003/018: downloading or copying a bad update must not destroy the existing installation, competing updates must not overlap, and service failure must not be presented as successful installation. ST0-010's entry reservation was corrected separately in PR #6; preserve it and design any future cross-operation exclusion separately, with update-specific error/status handling. Do not claim full backend-switch, settings-restoration or networking correctness from this package. This conditional proposal is not the next automatic implementation task; follow the [current correction queue](../../audits/2026-10-15-stage-0-findings.md#correction-order-and-stage-0-handoff).
 
 The owner selected `WiFi Optimizer TMS` and repository/package `wifi-optimizer-tms`. Follow the [identity design](2026-10-15-tms-identity-design.md): retain the installation directory `WiFi Optimizer`, settings/data/log paths and existing dispatcher/system-config filenames. Public identity/URL/archive cutover is implemented through PR #4/#5; device migration and this proposed recovery implementation remain separate pending work. Keep version `0.11.6` until release preparation; all remaining first-Stable audit/device gates still apply.
 

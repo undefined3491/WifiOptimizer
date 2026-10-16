@@ -24,6 +24,6 @@ Prior Optimize Safe use means the current device must not be described as an unt
 2. Preserve the observed configuration and review a recovery procedure before changing settings. Distinguish a snapshot of the already modified device from its unknown pre-plugin state.
 3. On a reviewed, corrected candidate, compare individual options under repeatable conditions before evaluating a combined preset. Record useful outcomes for the owner's workload (for example loss, latency variation, disconnects or streaming stutter) and inconclusive/no-benefit results.
 
-No new optimization, reset, installation, backend switch, rename deployment or runtime test was performed to produce this record. Stage 0 and all audit findings remain open.
+No new optimization, reset, installation, backend switch, rename deployment or runtime test was performed to produce this record. It closes no audit finding; the [audit report](../../audits/2026-10-15-stage-0-findings.md) owns subsequent correction status. Stage 0 remains open.
 
 Follow-up: the [2026-10-16 read-only device inventory and runtime evidence](2026-10-16-owner-device-inventory.md) now record installed OS/build/kernel/driver, live Decky version, evidence of the active backend, observed plugin file identity and configuration. Controlled validation remains separate from this original owner report.

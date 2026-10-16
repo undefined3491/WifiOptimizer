@@ -4,7 +4,7 @@ Public plugin name: **WiFi Optimizer TMS**; package: **`wifi-optimizer-tms`**. T
 
 This fork is maintained at [undefined3491/wifi-optimizer-tms](https://github.com/undefined3491/wifi-optimizer-tms), based on the original [Arcada Labs project](https://github.com/ArcadaLabs-Jason/WifiOptimizer).
 
-> **Heads up:** This plugin modifies WiFi and network settings. Some optimizations (band preference, custom DNS, WiFi backend switch) can temporarily prevent WiFi from connecting. If this happens, a reboot usually fixes it. You can also try forgetting and rejoining your WiFi network from Steam settings.
+> **Development status:** Stage 0 is open. Network/profile changes can persist across reboots, and installation/update/reset/uninstall have unresolved audit findings. Review the [current state and next steps](docs/audits/2026-10-15-stage-0.md#start-the-next-session) and prepare recovery before changing an existing installation; a reboot is not a complete rollback.
 
 A [Decky Loader](https://decky.xyz/) plugin exposing WiFi and network settings intended to improve game streaming, including Steam Remote Play, [Moonlight](https://moonlight-stream.org/) / [Sunshine](https://app.lizardbyte.dev/Sunshine/), Parsec and Chiaki. This fork is auditing the inherited implementation and measuring its effects on current systems.
 
@@ -30,7 +30,7 @@ Switch back to Game Mode. Open the Quick Access Menu (**...** button) > Decky > 
 
 **Updating:** The plugin checks for updates automatically when you open it. If an update is available, an update button appears at the top of the panel - tap it and the plugin updates and restarts itself. You can also update manually by running the install command above again.
 
-Installation and updates use this fork. The installer falls back to its `main` branch when no release is available. In-app Stable updates require a published GitHub release with a `v<version>` tag; Beta updates require a `beta` branch with a version in `package.json`. Until those are available, use the install command above.
+Installation and updates use this fork. The installer falls back to its `main` branch when no release is available. In-app Stable updates require a published GitHub release with a `v<version>` tag; Beta updates require a `beta` branch with a version in `package.json`. The command above describes the existing installer; it is not a validated migration or recovery procedure for Stage 0.
 
 > **Note:** If you're on a version before v0.6.6, the in-app updater had bugs. Please update manually using the install command above to get working auto-updates.
 
@@ -71,7 +71,7 @@ Want to go further? The remaining optimizations are available as individual togg
 
 | Device | WiFi Chip | Driver | Notes |
 |---|---|---|---|
-| Steam Deck LCD | WiFi 5 (RTL8822CE) | rtw88 | First validation target; results pending |
+| Steam Deck LCD | WiFi 5 (RTL8822CE) | rtw88 | Existing-installation inventory recorded; corrected-candidate validation pending |
 | Steam Deck OLED | WiFi 6E (QCA206X) | ath11k_pci | Upstream handling; unverified in this fork |
 | Legion Go (matching adapters) | WiFi 6E (MT7922) | mt7921e | Upstream handling; model/adapter coverage unverified |
 | ROG Ally (matching adapters) | WiFi 6E (MT7922) | mt7921e | Upstream handling; model/adapter coverage unverified |
@@ -91,7 +91,7 @@ The visible panel polls status, and a plugin-level game-start listener reapplies
 
 ## Uninstall
 
-**Before uninstalling:** tap **Reset Settings** in the plugin's Actions section. This reverts the runtime optimizations (power save, buffer tuning, PCIe ASPM, CAKE) and deletes the plugin's own config files. Per-connection NetworkManager profile changes (BSSID lock, band preference, custom DNS, IPv6) stay on your saved WiFi network - to remove those, forget and rejoin the network from Steam's WiFi settings. The WiFi backend choice (iwd vs wpa_supplicant) is system-wide. Reset and uninstall remove the plugin's generic backend override used on systems such as Bazzite/CachyOS; the SteamOS helper's backend configuration and systemd service state are left in place.
+**Before uninstalling:** review ST0-004/016 in the [audit report](docs/audits/2026-10-15-stage-0-findings.md) and preserve recoverable configuration under the [device protocol](docs/testing/steam-deck-lcd-stable.md). Current Reset/Uninstall write assumed defaults and remove configuration without restoring a recorded pre-plugin state; they are not a verified recovery procedure. Per-connection NetworkManager profile changes (BSSID lock, band preference, custom DNS, IPv6) can remain on saved networks. The WiFi backend choice is system-wide: Reset/Uninstall remove the generic optimizer backend override, while the SteamOS helper's backend configuration and systemd service state are left in place.
 
 Then uninstall from Decky's plugin manager (Decky settings > WiFi Optimizer TMS > Uninstall), or manually:
 
@@ -118,10 +118,6 @@ pnpm run build
 To deploy to your Deck, copy `.vscode/defsettings.json` to `.vscode/settings.json`, fill in your Deck's IP and password, then use the VS Code **builddeploy** task (Terminal > Run Task).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution, verification, and release workflow, [ROADMAP.md](ROADMAP.md) for planned work, and [CHANGELOG.md](CHANGELOG.md) for implemented fork changes. Stage 0 audit and device validation precede the first Stable release of this fork.
-
-## Contact
-
-Follow development on [Bluesky](https://bsky.app/profile/thefanciestpeanut.bsky.social).
 
 ## License
 

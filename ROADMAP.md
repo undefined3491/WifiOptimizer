@@ -6,7 +6,7 @@ The fork's next product goal is to make a loss of connectivity visible during ga
 
 ## Stage 0 — Audit and establish a baseline
 
-**Status: In progress — static review and initial read-only device inventory completed; ST0-010's entry reservation race corrected with isolated regression tests and independent review; 13 Important and 9 Minor findings remain open.** See the [consolidated report](docs/audits/2026-10-15-stage-0-findings.md), [correction plan](docs/superpowers/plans/2026-10-16-stage-0-backend-reservation.md) and [existing-installation inventory](docs/testing/results/2026-10-16-owner-device-inventory.md). Candidate-specific device validation is pending. Static review and observation do not close Stage 0.
+**Status: In progress.** Static review and existing-device inventory are complete; ST0-010's entry race is corrected. Other findings and corrected-candidate device validation remain pending. The [continuation entry](docs/audits/2026-10-15-stage-0.md#start-the-next-session) records current state; the [correction queue](docs/audits/2026-10-15-stage-0-findings.md#correction-order-and-stage-0-handoff) defines the next ST0-005/006 package and later recovery, behavior/UI and candidate-validation work. Static review and observation do not close Stage 0.
 
 - Review the inherited Python backend, shell installer/dispatcher and React frontend, including privileged writes, error handling, reconnects, update/install recovery, reset and uninstall.
 - Reassess every optimization against current SteamOS, drivers and measured behavior. Record a decision to retain, constrain, change or remove it, with evidence and tradeoffs.
