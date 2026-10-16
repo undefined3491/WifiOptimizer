@@ -72,6 +72,7 @@ class ProfileFixture:
         self.backend_current = None
         self.nm_profiles = {}
         self.nmcli_fail_keys = set()
+        self.nmcli_fail_uuid = None
         self.nmcli_stderr = "simulated nmcli failure"
         self.nmcli_calls = []
         self.run_cmd_calls = []
@@ -226,7 +227,14 @@ class ProfileFixture:
 
     def _stub_nmcli_modify(self, uuid, key, value, timeout=5):
         self.nmcli_calls.append((uuid, key, value))
-        if key in self.nmcli_fail_keys:
+        fail_uuid = self.nmcli_fail_uuid
+        uuid_match = True
+        if fail_uuid is not None:
+            if isinstance(fail_uuid, (set, list, tuple)):
+                uuid_match = uuid in fail_uuid
+            else:
+                uuid_match = uuid == fail_uuid
+        if key in self.nmcli_fail_keys and uuid_match:
             return {
                 "success": False,
                 "stdout": "",
@@ -466,6 +474,204 @@ class ProfileOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bssid_mods, [])
         self.assertIn((UUID_B, "802-11-wireless.band", "a"), f.nmcli_calls)
         self.assertEqual(f.settings["band_owner_uuid"], UUID_B)
+
+    async def test_transfer_warnings_clean_and_failed(self):
+        # Band clean transfer: prev A -> active B succeeds with [].
+        f = self.fixture()
+        f.active_uuid = UUID_B
+        f.settings.update(
+            {
+                "band_preference_enabled": True,
+                "band_preference": "bg",
+                "band_owner_uuid": UUID_A,
+            }
+        )
+        f.nm_profiles[UUID_A] = {"802-11-wireless.band": "bg"}
+        f.nm_profiles[UUID_B] = {"802-11-wireless.band": ""}
+        result = await f.plugin.set_band_preference(True, "a")
+        self.assertTrue(result["success"])
+        self.assertEqual(result.get("transfer_warnings"), [])
+        self.assertIn((UUID_B, "802-11-wireless.band", "a"), f.nmcli_calls)
+        self.assertIn((UUID_A, "802-11-wireless.band", ""), f.nmcli_calls)
+        self.assertEqual(f.settings["band_owner_uuid"], UUID_B)
+        self.assertEqual(f.reconnects, [UUID_B])
+
+        # Band failed transfer: old-profile clear fails, enable still
+        # succeeds with one "key: stderr" entry and moves ownership.
+        g = self.fixture()
+        g.active_uuid = UUID_B
+        g.settings.update(
+            {
+                "band_preference_enabled": True,
+                "band_preference": "bg",
+                "band_owner_uuid": UUID_A,
+            }
+        )
+        g.nmcli_fail_keys = {"802-11-wireless.band"}
+        g.nmcli_fail_uuid = UUID_A
+        result = await g.plugin.set_band_preference(True, "a")
+        self.assertTrue(result["success"])
+        self.assertEqual(
+            result.get("transfer_warnings"),
+            [f"802-11-wireless.band: {g.nmcli_stderr}"],
+        )
+        self.assertEqual(g.settings["band_owner_uuid"], UUID_B)
+        self.assertEqual(g.reconnects, [UUID_B])
+
+        # DNS two-key failed transfer: both clears fail, two entries.
+        h = self.fixture()
+        h.active_uuid = UUID_B
+        h.settings.update(
+            {
+                "dns_enabled": True,
+                "dns_provider": "cloudflare",
+                "dns_owner_uuid": UUID_A,
+            }
+        )
+        h.nmcli_fail_keys = {"ipv4.dns", "ipv4.ignore-auto-dns"}
+        h.nmcli_fail_uuid = UUID_A
+        result = await h.plugin.set_dns(True, "cloudflare")
+        self.assertTrue(result["success"])
+        self.assertEqual(
+            result.get("transfer_warnings"),
+            [
+                f"ipv4.dns: {h.nmcli_stderr}",
+                f"ipv4.ignore-auto-dns: {h.nmcli_stderr}",
+            ],
+        )
+        self.assertEqual(h.settings["dns_owner_uuid"], UUID_B)
+        self.assertEqual(h.reconnects, [UUID_B])
+
+    async def test_relock_failed_empty_bssid(self):
+        f = self.fixture()
+        f.active_uuid = UUID_A
+        f.link_bssid = ""
+        f.settings.update(
+            {
+                "bssid_lock_enabled": True,
+                "bssid_lock_value": "AA:BB:CC:DD:EE:FF",
+                "bssid_lock_connection_uuid": UUID_A,
+                "band_preference_enabled": False,
+            }
+        )
+        result = await f.plugin.set_band_preference(True, "a")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"], "relock_failed")
+        self.assertEqual(result["band"], "a")
+        self.assertEqual(f.reconnects, [UUID_A])
+        self.assertEqual(f.save_count, 1)
+        self.assertTrue(f.settings["band_preference_enabled"])
+        self.assertEqual(f.settings["band_owner_uuid"], UUID_A)
+        self.assertIn(3, f.sleep_calls)
+
+    async def test_relock_failed_nmcli(self):
+        f = self.fixture()
+        f.active_uuid = UUID_A
+        f.link_bssid = "11:22:33:44:55:66"
+        f.settings.update(
+            {
+                "bssid_lock_enabled": True,
+                "bssid_lock_value": "AA:BB:CC:DD:EE:FF",
+                "bssid_lock_connection_uuid": UUID_A,
+                "band_preference_enabled": False,
+            }
+        )
+        f.nmcli_fail_keys = {"802-11-wireless.bssid"}
+        result = await f.plugin.set_band_preference(True, "bg")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"], "relock_failed")
+        self.assertEqual(result["band"], "bg")
+        self.assertEqual(result["detail"], f.nmcli_stderr)
+        self.assertEqual(f.reconnects, [UUID_A])
+        self.assertEqual(f.save_count, 1)
+        self.assertTrue(f.settings["band_preference_enabled"])
+        self.assertEqual(f.settings["band_owner_uuid"], UUID_A)
+
+    async def test_disabler_failure_preserves_owner(self):
+        # Band disable nmcli failure keeps intent and owner.
+        f = self.fixture()
+        f.active_uuid = UUID_A
+        f.settings.update(
+            {
+                "band_preference_enabled": True,
+                "band_preference": "a",
+                "band_owner_uuid": UUID_A,
+            }
+        )
+        f.nmcli_fail_keys = {"802-11-wireless.band"}
+        last_applied = f.settings["last_applied"]
+        result = await f.plugin.set_band_preference(False)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"], "nmcli_failed")
+        self.assertTrue(f.settings["band_preference_enabled"])
+        self.assertEqual(f.settings["band_owner_uuid"], UUID_A)
+        self.assertEqual(f.settings["band_preference"], "a")
+        self.assertEqual(f.settings["last_applied"], last_applied)
+        self.assertEqual(f.save_count, 0)
+        self.assertEqual(f.reconnects, [])
+
+        # DNS disable nmcli failure keeps intent and owner.
+        g = self.fixture()
+        g.active_uuid = UUID_A
+        g.settings.update(
+            {
+                "dns_enabled": True,
+                "dns_provider": "cloudflare",
+                "dns_owner_uuid": UUID_A,
+            }
+        )
+        g.nmcli_fail_keys = {"ipv4.dns"}
+        last_applied = g.settings["last_applied"]
+        result = await g.plugin.set_dns(False)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"], "nmcli_failed")
+        self.assertTrue(g.settings["dns_enabled"])
+        self.assertEqual(g.settings["dns_owner_uuid"], UUID_A)
+        self.assertEqual(g.settings["last_applied"], last_applied)
+        self.assertEqual(g.save_count, 0)
+        self.assertEqual(g.reconnects, [])
+
+        # BSSID disable nmcli failure keeps intent and owner.
+        h = self.fixture()
+        h.active_uuid = UUID_A
+        h.settings.update(
+            {
+                "bssid_lock_enabled": True,
+                "bssid_lock_value": "AA:BB:CC:DD:EE:FF",
+                "bssid_lock_connection_uuid": UUID_A,
+            }
+        )
+        h.nmcli_fail_keys = {"802-11-wireless.bssid"}
+        last_applied = h.settings["last_applied"]
+        result = await h.plugin.set_bssid_lock(False)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"], "nmcli_failed")
+        self.assertTrue(h.settings["bssid_lock_enabled"])
+        self.assertEqual(h.settings["bssid_lock_connection_uuid"], UUID_A)
+        self.assertEqual(h.settings["bssid_lock_value"], "AA:BB:CC:DD:EE:FF")
+        self.assertEqual(h.settings["last_applied"], last_applied)
+        self.assertEqual(h.save_count, 0)
+        self.assertEqual(h.reconnects, [])
+
+    async def test_bssid_disable_prefers_owner_over_active(self):
+        f = self.fixture()
+        f.active_uuid = UUID_B
+        f.settings.update(
+            {
+                "bssid_lock_enabled": True,
+                "bssid_lock_value": "AA:BB:CC:DD:EE:FF",
+                "bssid_lock_connection_uuid": UUID_A,
+                "last_connection_uuid": UUID_B,
+            }
+        )
+        result = await f.plugin.set_bssid_lock(False)
+        self.assertTrue(result["success"])
+        self.assertFalse(result["reconnected"])
+        self.assertEqual(f.reconnects, [])
+        self.assertEqual(f.nmcli_calls, [(UUID_A, "802-11-wireless.bssid", "")])
+        self.assertFalse(f.settings["bssid_lock_enabled"])
+        self.assertEqual(f.settings["bssid_lock_connection_uuid"], "")
+        self.assertEqual(f.settings["bssid_lock_value"], "")
 
     def test_status_has_no_save_or_modify(self):
         f = self.fixture()

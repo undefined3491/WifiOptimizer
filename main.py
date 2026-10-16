@@ -163,6 +163,7 @@ DEFAULT_SETTINGS = {
     "ipv6_disabled": False,
     "buffer_tuning_enabled": False,
     "cake_enabled": False,
+    # D2: last_connection_uuid/priority_set retained for ST0-004/016; priority-100 writes removed.
     "last_connection_uuid": "",
     "priority_set": False,
     "distro_id": "unknown",
