@@ -85,7 +85,23 @@ The baseline report recorded **14 Important and 9 Minor findings**, with **no Cr
   clean (one environmental note: suite needs Git Bash on PATH on Windows). See
   the [design](../superpowers/specs/2026-10-16-st0-claims-toolchain-design.md)
   and [plan](../superpowers/plans/2026-10-16-st0-claims-toolchain.md).
-- The other **6 Important and 3 Minor findings remain open**. Stage 0 and first Stable remain gated on their resolution/disposition and candidate-specific device evidence.
+- **ST0-011/012/013/015/020: corrected, isolated + review verification (this branch).**
+  New `repair_drifted()` repairs only enabled-and-drifted settings (fresh
+  read-only selection, shared drift formulas, `auto_fix`/backend excluded, DNS
+  covered by new `drift.dns` subset detection); drift banner calls it instead of
+  the preset-enabling Optimize Safe. Custom DNS is draft/applied separated
+  (select/type/Apply-Cancel, no blur-submit, poll-guarded refresh, pre-mounted
+  error field). Backend poll retries once boundedly with a working Retry action,
+  tick-bounded `unknown` state and overlap guard; all timers/awaits carry
+  dismount guards (zero post-dismount IPC/state). Eleven isolated backend tests
+  (red→green) in `tests/test_repair_drift.py`; full suite 112 tests OK
+  (3 Windows inventory skips, Git Bash on PATH); `tsc --skipLibCheck` and
+  `pnpm run build` clean with rebuilt tracked `dist`. Independent review READY
+  (3 non-blocking minors, closed in a fix round). See the [design](../superpowers/specs/2026-10-16-st0-ui-intent-design.md)
+  and [plan](../superpowers/plans/2026-10-16-st0-ui-intent.md).
+  Corrected-candidate device validation (including on-screen keyboard and
+  gamepad-focus behavior) remains pending.
+- The other **3 Important and 1 Minor findings remain open**. Stage 0 and first Stable remain gated on their resolution/disposition and candidate-specific device evidence.
 
 ## Coverage and evidence
 
