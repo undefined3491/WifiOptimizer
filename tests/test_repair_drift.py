@@ -391,7 +391,7 @@ class RepairFixture:
 
     def make_healthy(self, **overrides):
         """Seed every flag enabled with owners and matching live state."""
-        self.seed_settings(
+        base = dict(
             power_save_disabled=True,
             auto_fix_on_wake=True,
             bssid_lock_enabled=True,
@@ -408,8 +408,9 @@ class RepairFixture:
             ipv6_owner_uuid=UUID_A,
             buffer_tuning_enabled=True,
             cake_enabled=True,
-            **overrides,
         )
+        base.update(overrides)
+        self.seed_settings(**base)
         self.power_save_off = True
         self.sysctl = dict(self.SYSCTL_PARAMS)
         self.qdisc_output = SEED_QDISC

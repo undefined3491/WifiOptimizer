@@ -44,6 +44,9 @@ METHOD_NAMES = {
     "_unexpected_response",
     "_get_cake_status",
     "get_status",
+    "_compute_drift_flags",
+    "_parse_dns_ips",
+    "_is_dns_drifted",
     "get_diagnostic_info",
 }
 

@@ -28,6 +28,9 @@ TEMPLATE = Path(__file__).resolve().parents[1] / "defaults" / "dispatcher.sh.tmp
 
 METHOD_NAMES = {
     "get_status",
+    "_compute_drift_flags",
+    "_parse_dns_ips",
+    "_is_dns_drifted",
     "set_power_save",
     "set_auto_fix",
     "set_bssid_lock",

@@ -1598,6 +1598,197 @@ class Plugin:
 
     # ---- Status ----
 
+    def _parse_dns_ips(self, raw: str) -> set:
+        """Parse live `IP4.DNS` device output into a set of IP strings.
+
+        Each line looks like `IP4.DNS[1]:192.168.1.1`: strip the index
+        prefix (everything through the first colon) and whitespace.
+        Pure: no I/O, shared by status and repair selection (D2).
+        """
+        ips = set()
+        for line in (raw or "").split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            if ":" in line:
+                _, _, addr = line.partition(":")
+                addr = addr.strip()
+            else:
+                addr = line
+            if addr:
+                ips.add(addr)
+        return ips
+
+    def _is_dns_drifted(
+        self, settings: dict, connected: bool, live_raw: str
+    ) -> bool:
+        """True iff connected AND dns_enabled AND a server is missing live.
+
+        Drift iff NOT expected ⊆ live, where expected is the whitespace
+        split of the `dns_servers` setting and live is the parsed IP set.
+        Extra live servers are fine (subset rule). Pure: no I/O (D2).
+        """
+        if not connected:
+            return False
+        if not settings.get("dns_enabled"):
+            return False
+        expected = (settings.get("dns_servers") or "").split()
+        if not expected:
+            return False
+        live = self._parse_dns_ips(live_raw)
+        for server in expected:
+            if server not in live:
+                return True
+        return False
+
+    def _compute_drift_flags(self, settings: dict, live: dict) -> dict:
+        """Shared drift formulas over already-read live values (D1/D2).
+
+        `live` carries: connected, power_save_off, bssid_lock,
+        ipv6_method, band, buffer_tuning_applied, cake_applied, dns_raw.
+        Backend drift is NOT computed here (separate switch/repair flow).
+        Pure: no I/O, no saves, no NM writes. Used by both get_status and
+        _select_drift_repairs so the formulas cannot diverge.
+        """
+        drift = {}
+        if settings.get("power_save_disabled") and not live.get(
+            "power_save_off"
+        ):
+            drift["power_save"] = True
+        if settings.get("bssid_lock_enabled") and not live.get("bssid_lock"):
+            drift["bssid_lock"] = True
+        if settings.get("ipv6_disabled") and live.get("ipv6_method", "") != (
+            "disabled"
+        ):
+            drift["ipv6"] = True
+        if settings.get("band_preference_enabled") and live.get(
+            "band", ""
+        ) != settings.get("band_preference", "a"):
+            drift["band_preference"] = True
+        if settings.get("buffer_tuning_enabled") and not live.get(
+            "buffer_tuning_applied"
+        ):
+            drift["buffer_tuning"] = True
+        if settings.get("cake_enabled") and not live.get("cake_applied"):
+            drift["cake"] = True
+        if self._is_dns_drifted(
+            settings, live.get("connected", False), live.get("dns_raw", "")
+        ):
+            drift["dns"] = True
+        return drift
+
+    async def _select_drift_repairs(self) -> list:
+        """Fresh read-only drift selection for repair_drifted (D1).
+
+        Re-reads live state with the exact get_status commands and runs
+        the shared _compute_drift_flags (never get_status() itself, which
+        must stay out of the repair path). Read-only: only _run_cmd
+        reads; zero settings writes and zero _nmcli_modify calls.
+        Returns the enabled∩drifted keys in reapply_all order (auto_fix
+        and backend have no repair selection).
+        """
+        T = 2
+        settings = _load_settings()
+        iface = self._get_wifi_interface()
+        uuid = self._get_active_connection_uuid()
+        connected = iface is not None and uuid is not None
+        if not connected:
+            return []
+        live = {"connected": True}
+
+        ps_result = self._run_cmd(
+            ["/usr/bin/iw", "dev", iface, "get", "power_save"], timeout=T
+        )
+        live["power_save_off"] = (
+            "Power save: off" in ps_result.get("stdout", "")
+        )
+
+        bssid_result = self._run_cmd(
+            [
+                "/usr/bin/nmcli",
+                "-t",
+                "-f",
+                "802-11-wireless.bssid",
+                "con",
+                "show",
+                "uuid",
+                uuid,
+            ],
+            timeout=T,
+        )
+        bssid_out = bssid_result.get("stdout", "")
+        current_bssid_lock = ""
+        if ":" in bssid_out:
+            parts = bssid_out.split(":", 1)
+            if len(parts) == 2:
+                current_bssid_lock = parts[1].replace("\\", "").strip()
+        live["bssid_lock"] = current_bssid_lock
+
+        dns_result = self._run_cmd(
+            ["/usr/bin/nmcli", "-t", "-f", "IP4.DNS", "dev", "show", iface],
+            timeout=T,
+        )
+        live["dns_raw"] = dns_result.get("stdout", "")
+
+        ipv6_result = self._run_cmd(
+            [
+                "/usr/bin/nmcli",
+                "-t",
+                "-f",
+                "ipv6.method",
+                "con",
+                "show",
+                "uuid",
+                uuid,
+            ],
+            timeout=T,
+        )
+        ipv6_out = ipv6_result.get("stdout", "")
+        live["ipv6_method"] = (
+            ipv6_out.split(":", 1)[1].strip() if ":" in ipv6_out else ""
+        )
+
+        band_result = self._run_cmd(
+            [
+                "/usr/bin/nmcli",
+                "-t",
+                "-f",
+                "802-11-wireless.band",
+                "con",
+                "show",
+                "uuid",
+                uuid,
+            ],
+            timeout=T,
+        )
+        band_out = band_result.get("stdout", "")
+        live["band"] = (
+            band_out.split(":", 1)[1].strip() if ":" in band_out else ""
+        )
+
+        buffer_applied = True
+        for sysctl_key, sysctl_want in SYSCTL_PARAMS.items():
+            sysctl_result = self._run_cmd(
+                ["/usr/bin/sysctl", "-n", sysctl_key], timeout=T
+            )
+            if sysctl_result.get("stdout", "").strip() != sysctl_want:
+                buffer_applied = False
+        live["buffer_tuning_applied"] = buffer_applied
+
+        live["cake_applied"] = self._get_cake_status(iface)
+
+        drift = self._compute_drift_flags(settings, live)
+        order = [
+            "buffer_tuning",
+            "cake",
+            "bssid_lock",
+            "band_preference",
+            "dns",
+            "ipv6",
+            "power_save",
+        ]
+        return [key for key in order if drift.get(key)]
+
     async def get_status(self) -> dict:
         # Use shorter timeout for read-only status queries to avoid blocking
         # the event loop if NM is unresponsive (~10 commands × 2s = 20s worst case)
@@ -1664,8 +1855,6 @@ class Plugin:
             )
             ps_off = "Power save: off" in ps_result.get("stdout", "")
             status["live"]["power_save_off"] = ps_off
-            if settings.get("power_save_disabled") and not ps_off:
-                status["drift"]["power_save"] = True
 
             # Link info
             link_result = self._run_cmd(
@@ -1735,8 +1924,6 @@ class Plugin:
                 if len(parts) == 2:
                     current_bssid_lock = parts[1].replace("\\", "").strip()
             status["live"]["bssid_lock"] = current_bssid_lock
-            if settings.get("bssid_lock_enabled") and not current_bssid_lock:
-                status["drift"]["bssid_lock"] = True
 
             # IP address
             ip_result = self._run_cmd(
@@ -1773,8 +1960,6 @@ class Plugin:
             ipv6_out = ipv6_result.get("stdout", "")
             live_ipv6 = ipv6_out.split(":", 1)[1].strip() if ":" in ipv6_out else ""
             status["live"]["ipv6_method"] = live_ipv6
-            if settings.get("ipv6_disabled") and live_ipv6 != "disabled":
-                status["drift"]["ipv6"] = True
 
             # Band preference
             band_result = self._run_cmd(
@@ -1793,9 +1978,6 @@ class Plugin:
             band_out = band_result.get("stdout", "")
             live_band = band_out.split(":", 1)[1].strip() if ":" in band_out else ""
             status["live"]["band"] = live_band
-            expected_band = settings.get("band_preference", "a")
-            if settings.get("band_preference_enabled") and live_band != expected_band:
-                status["drift"]["band_preference"] = True
 
             # Buffer tuning: compare every SYSCTL_PARAMS key, not just
             # rmem_max; any mismatch means not applied. (txqueuelen stays
@@ -1808,14 +1990,35 @@ class Plugin:
                 if sysctl_result.get("stdout", "").strip() != sysctl_want:
                     buffer_applied = False
             status["live"]["buffer_tuning_applied"] = buffer_applied
-            if settings.get("buffer_tuning_enabled") and not buffer_applied:
-                status["drift"]["buffer_tuning"] = True
 
             # CAKE QoS
             cake_active = self._get_cake_status(iface)
             status["live"]["cake_applied"] = cake_active
-            if settings.get("cake_enabled") and not cake_active:
-                status["drift"]["cake"] = True
+
+            # Shared drift formulas (D1/D2): same helper as repair
+            # selection so status and repair can never diverge. Backend
+            # drift stays separate above (excluded from repair).
+            status["drift"].update(
+                self._compute_drift_flags(
+                    settings,
+                    {
+                        "connected": True,
+                        "power_save_off": status["live"].get(
+                            "power_save_off", False
+                        ),
+                        "bssid_lock": status["live"].get("bssid_lock", ""),
+                        "ipv6_method": status["live"].get("ipv6_method", ""),
+                        "band": status["live"].get("band", ""),
+                        "buffer_tuning_applied": status["live"].get(
+                            "buffer_tuning_applied", False
+                        ),
+                        "cake_applied": status["live"].get(
+                            "cake_applied", False
+                        ),
+                        "dns_raw": status["live"].get("dns", ""),
+                    },
+                )
+            )
 
             # Dispatcher
             status["live"]["dispatcher_installed"] = os.path.isfile(DISPATCHER_PATH)
@@ -3303,6 +3506,81 @@ class Plugin:
             }
         except Exception as e:
             decky.logger.error(f"reapply_all error: {e}")
+            return self._unexpected_response(e)
+
+    async def repair_drifted(self) -> dict:
+        """Re-apply only enabled-and-drifted optimizations (ST0-011 D1).
+
+        Selection is a fresh read-only live read via
+        _select_drift_repairs (shared formulas, never get_status()
+        itself). A flag is re-applied with set_*(True) iff it is enabled
+        AND drifted now: disabled flags are never enabled, healthy
+        profiles never reconnect. auto_fix has no drift key and backend
+        uses the separate switch/retry flow, so both are excluded.
+        Order and aggregation mirror reapply_all. total==0 renders as
+        "No drifted settings". A per-child unknown_owner fails that
+        child only; top success requires all children to succeed.
+        """
+        try:
+            selected = await self._select_drift_repairs()
+            if not selected:
+                return {
+                    "success": True,
+                    "total": 0,
+                    "applied": 0,
+                    "results": {},
+                    "message": "No drifted settings",
+                }
+
+            settings = _load_settings()
+            results = {}
+            applied = 0
+            total = 0
+
+            # Non-reconnecting first, power save last (mirrors reapply_all).
+            for key in selected:
+                total += 1
+                if key == "buffer_tuning":
+                    r = await self.set_buffer_tuning(True)
+                elif key == "cake":
+                    r = await self.set_cake(True)
+                elif key == "bssid_lock":
+                    r = await self.set_bssid_lock(True)
+                elif key == "band_preference":
+                    r = await self.set_band_preference(
+                        True, settings.get("band_preference", "a")
+                    )
+                elif key == "dns":
+                    r = await self.set_dns(
+                        True,
+                        settings.get("dns_provider", "cloudflare"),
+                        settings.get("dns_servers", ""),
+                    )
+                elif key == "ipv6":
+                    r = await self.set_ipv6(True)
+                else:
+                    r = await self.set_power_save(True)
+                results[key] = r
+                if r.get("success"):
+                    applied += 1
+
+            child_reconnects = [
+                r.get("reconnect") or {} for r in results.values()
+            ]
+            return {
+                "success": all(r.get("success") for r in results.values()),
+                "total": total,
+                "applied": applied,
+                "results": results,
+                "reconnected": any(
+                    rc.get("verified", False) for rc in child_reconnects
+                ),
+                "did_reconnect": any(
+                    rc.get("attempted", False) for rc in child_reconnects
+                ),
+            }
+        except Exception as e:
+            decky.logger.error(f"repair_drifted error: {e}")
             return self._unexpected_response(e)
 
     async def reset_settings(self) -> dict:
