@@ -1,8 +1,8 @@
 # WiFi Optimizer TMS v0.11.6
 
-Public plugin name: **WiFi Optimizer TMS**; package: **`wifi-optimizer-tms`**. The GitHub repository still uses `WifiOptimizer`; its rename is a separate coordinated step. The technical installation/settings directory remains `WiFi Optimizer`. See the [branding stages and compatibility identifiers](docs/branding.md).
+Public plugin name: **WiFi Optimizer TMS**; package: **`wifi-optimizer-tms`**. The canonical GitHub repository is `undefined3491/wifi-optimizer-tms`. The technical installation/settings directory remains `WiFi Optimizer`. See the [branding stages and compatibility identifiers](docs/branding.md).
 
-This fork is maintained at [undefined3491/WifiOptimizer](https://github.com/undefined3491/WifiOptimizer), based on the original [Arcada Labs project](https://github.com/ArcadaLabs-Jason/WifiOptimizer).
+This fork is maintained at [undefined3491/wifi-optimizer-tms](https://github.com/undefined3491/wifi-optimizer-tms), based on the original [Arcada Labs project](https://github.com/ArcadaLabs-Jason/WifiOptimizer).
 
 > **Heads up:** This plugin modifies WiFi and network settings. Some optimizations (band preference, custom DNS, WiFi backend switch) can temporarily prevent WiFi from connecting. If this happens, a reboot usually fixes it. You can also try forgetting and rejoining your WiFi network from Steam settings.
 
@@ -21,7 +21,7 @@ WiFi Optimizer TMS exposes these settings from Game Mode and can reapply enabled
 [Decky Loader](https://decky.xyz/) must be installed first. Then open Desktop Mode > Konsole and run:
 
 ```bash
-curl -sL https://github.com/undefined3491/WifiOptimizer/raw/main/install.sh -o /tmp/wifi-opt-install.sh && sudo bash /tmp/wifi-opt-install.sh
+curl -sL https://github.com/undefined3491/wifi-optimizer-tms/raw/main/install.sh -o /tmp/wifi-opt-install.sh && sudo bash /tmp/wifi-opt-install.sh
 ```
 
 This requires a user password - set one with `passwd` in Konsole if you haven't already.
@@ -109,8 +109,8 @@ sudo systemctl restart plugin_loader
 Requires Node.js and pnpm v9.
 
 ```bash
-git clone https://github.com/undefined3491/WifiOptimizer.git
-cd WifiOptimizer
+git clone https://github.com/undefined3491/wifi-optimizer-tms.git
+cd wifi-optimizer-tms
 pnpm i
 pnpm run build
 ```

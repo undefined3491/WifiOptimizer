@@ -8,7 +8,7 @@ Merging does not publish a release. Documentation and CI-only changes do not nee
 
 ## Branding and deployment paths
 
-The public name is `WiFi Optimizer TMS`, and `package.json` uses `wifi-optimizer-tms`. The GitHub repository is still `undefined3491/WifiOptimizer`. Keep `.vscode/defsettings.json` / local settings `pluginname` at `WiFi Optimizer`: it selects the existing install/settings directory, not the visible label. Follow [the branding stages](docs/branding.md) before changing repository URLs, archive roots or device paths. A source rename does not publish or deploy the plugin.
+The public name is `WiFi Optimizer TMS`, and `package.json` uses `wifi-optimizer-tms`. The canonical GitHub repository is `undefined3491/wifi-optimizer-tms`. Keep `.vscode/defsettings.json` / local settings `pluginname` at `WiFi Optimizer`: it selects the existing install/settings directory, not the visible label. Follow [the branding stages](docs/branding.md) before changing repository URLs, archive roots or device paths. A source rename does not publish or deploy the plugin.
 
 ## Local checks and generated files
 
