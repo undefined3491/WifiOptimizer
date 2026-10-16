@@ -63,7 +63,6 @@
 - [ ] **Step 2a: Implement readers** per D1 (conf order unchanged + source path; services both with four-state distinction).
 - [ ] **Step 2b: Implement gate** per D2 (converged no-op, repair accept, reboot reject with in-memory outstanding rule). Update `tests/test_backend_reservation.py` already_set cases to script desired+effective (agreement→no-op, desired-only→repair-accept); add needs_reboot set→reject→clear→accept fixture case.
 - [ ] **Step 2c: Implement status/diagnostics/boot feed** per D6/D8 (wire `"unknown"`, `drift.backend`, diagnostics triple + failure-path test).
-- [ ] **Step 2c: Implement status/diagnostics/boot feed** per D6/D8.
 - [ ] **Step 3: Run** `python -m unittest tests.test_backend_state -v` Expected: read/guard/status tests PASS.
 - [ ] **Step 4: Run full suite** `python -m unittest discover -s tests` Expected: no regressions (89 + new).
 - [ ] **Step 5: Commit** `git add main.py tests/test_backend_state.py; git commit -m "fix: backend desired/effective split with converged gate (ST0-009)"`
