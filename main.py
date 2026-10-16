@@ -2064,6 +2064,10 @@ systemctl restart plugin_loader 2>/dev/null || true
 
     async def start_backend_switch(self, backend: str) -> dict:
         """Kick off a backend switch. Returns immediately; poll get_backend_switch_status for progress."""
+        reserved = False
+        launched = False
+        worker = None
+        previous_state = None
         try:
             self._ensure_backend_switch_state()
             if backend not in ("iwd", "wpa_supplicant"):
@@ -2084,6 +2088,16 @@ systemctl restart plugin_loader 2>/dev/null || true
                     "reason": "in_progress",
                     "message": "Backend switch already in progress.",
                 }
+            # Reserve before yielding so overlapping requests cannot launch two workers.
+            previous_state = dict(self._backend_switch)
+            self._backend_switch.update({
+                "in_progress": True,
+                "phase": "switching",
+                "target": backend,
+                "started_at": int(time.time()),
+                "result": None,
+            })
+            reserved = True
             current = await asyncio.to_thread(self._get_current_backend)
             if current == backend:
                 return {
@@ -2093,13 +2107,6 @@ systemctl restart plugin_loader 2>/dev/null || true
                     "backend": current,
                 }
 
-            self._backend_switch.update({
-                "in_progress": True,
-                "phase": "switching",
-                "target": backend,
-                "started_at": int(time.time()),
-                "result": None,
-            })
             # Route to the appropriate worker based on backend method
             method = self._get_backend_method()
             if method == "steamos":
@@ -2107,6 +2114,7 @@ systemctl restart plugin_loader 2>/dev/null || true
             else:
                 worker = self._generic_backend_switch_worker(backend)
             self._backend_switch_task = asyncio.create_task(worker)
+            launched = True
             decky.logger.info(f"backend switch started: {current} -> {backend}")
             return {
                 "accepted": True,
@@ -2120,6 +2128,11 @@ systemctl restart plugin_loader 2>/dev/null || true
                 "reason": "unexpected",
                 "message": str(e),
             }
+        finally:
+            if reserved and not launched:
+                if worker is not None:
+                    worker.close()
+                self._backend_switch.update(previous_state)
 
     async def get_backend_switch_status(self) -> dict:
         """Return current phase and, when terminal, the final result."""

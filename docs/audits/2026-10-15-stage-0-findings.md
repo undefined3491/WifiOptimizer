@@ -4,7 +4,12 @@ Date: 2026-10-15. Audited product commit: `e957c5b49797ef456cbd8edf093eb83704aac
 
 **Static review completed; Stage 0 remains open.** Three independent owner-selected `gpt-6.1-sol` reviewers inspected backend state/restoration, installation/update/delivery, and frontend/IPC. The coordinator inspected platform documentation, checked findings against source, calibrated/deduplicated them and assembled this report. No plugin runtime, installer, dispatcher, network setting, device operation or exploit was executed on Windows.
 
-The report records **14 Important and 9 Minor open findings**, with **no Critical finding established by this review**. This is not a guarantee that no additional defect exists. Important findings block the first fork Stable release under the Stage 0 criteria. Dependency database scores and unverified security scenarios are distinguished from demonstrated plugin impact.
+The baseline report recorded **14 Important and 9 Minor findings**, with **no Critical finding established by this review**. Subsequent correction evidence is tracked below; the baseline traces and line numbers remain historical. This is not a guarantee that no additional defect exists. Important findings block the first fork Stable release under the Stage 0 criteria. Dependency database scores and unverified security scenarios are distinguished from demonstrated plugin impact.
+
+## Correction progress — 2026-10-16
+
+- **ST0-010: corrected in source, isolated regression verified.** Switch entry reserves before its first await; an unlaunched exit restores the previous state and closes any unlaunched coroutine. Successful task creation transfers completion ownership to the existing worker. Nine isolated tests cover both routes, overlap, rejection, cancellation, failures and retry; they failed on the baseline defect and pass with the correction. Independent `gpt-6.1-sol` review found no blockers. See the [scoped plan and verification record](../superpowers/plans/2026-10-16-stage-0-backend-reservation.md). This resolves the entry reservation race, not effective-backend detection, worker/thread cancellation or updater exclusion. No live competing switches were attempted; corrected-candidate device validation remains pending.
+- The other **13 Important and 9 Minor findings remain open**. Stage 0 and first Stable remain gated on their resolution/disposition and candidate-specific device evidence.
 
 ## Coverage and evidence
 
