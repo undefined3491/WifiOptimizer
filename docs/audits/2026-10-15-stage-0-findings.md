@@ -9,7 +9,21 @@ The baseline report recorded **14 Important and 9 Minor findings**, with **no Cr
 ## Correction progress — 2026-10-16
 
 - **ST0-010: corrected in source, isolated regression verified.** Switch entry reserves before its first await; an unlaunched exit restores the previous state and closes any unlaunched coroutine. Successful task creation transfers completion ownership to the existing worker. Nine isolated tests cover both routes, overlap, rejection, cancellation, failures and retry; they failed on the baseline defect and pass with the correction. Independent `gpt-6.1-sol` review found no blockers. See the [scoped plan and verification record](../superpowers/plans/2026-10-16-stage-0-backend-reservation.md). This resolves the entry reservation race, not effective-backend detection, worker/thread cancellation or updater exclusion. No live competing switches were attempted; corrected-candidate device validation remains pending.
-- The other **13 Important and 9 Minor findings remain open**. Stage 0 and first Stable remain gated on their resolution/disposition and candidate-specific device evidence.
+- **ST0-005/006: corrected in source, isolated regression verified (this branch).**
+  `get_status()` is read-only (no settings writes, no NM profile or priority
+  mutations; drift stays boolean reports plus additive `unknown_owners`
+  `bssid_lock`/`band_preference`/`dns`/`ipv6`). BSSID/band/DNS/IPv6 carry explicit
+  owner UUIDs recorded only on verified explicit success; disablers resolve the
+  owner offline and never touch a foreign active profile; legacy enabled-without-owner
+  splits into enable→`unknown_owner` vs disable→intent-only clear; failed `nmcli`
+  retains ownership for retry (`nmcli_failed`, `dns_partial`, `relock_failed`). No
+  `autoconnect-priority 100` on any path; pre-existing `100`s untouched for
+  ST0-004/016. Sixteen isolated tests (red→green) in `tests/test_profile_ownership.py`;
+  full suite 59 tests OK (3 Windows inventory skips, Git Bash on PATH). Independent
+  review + scoped re-review clean. See the [design](../superpowers/specs/2026-10-16-st0-005-006-profile-ownership-design.md)
+  and [plan](../superpowers/plans/2026-10-16-st0-005-006-profile-ownership.md).
+  Corrected-candidate device validation remains pending.
+- The other **11 Important and 9 Minor findings remain open**. Stage 0 and first Stable remain gated on their resolution/disposition and candidate-specific device evidence.
 
 ## Coverage and evidence
 
