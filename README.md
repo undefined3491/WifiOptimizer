@@ -44,7 +44,7 @@ Installation and updates use this fork. The installer falls back to its `main` b
    - Tunes network buffers (handles streaming traffic bursts)
 3. Enabled options are reapplied through plugin startup and the reconnect dispatcher. Verify actual state and connection behavior after sleep/wake and updates.
 
-Want to go further? The remaining optimizations are available as individual toggles - each one has an **(i)** icon you can tap for an explanation of what it does and its tradeoffs. Advanced options include a 5 GHz band restriction, custom DNS, disabling IPv6, CAKE traffic shaping, and switching between the `iwd` and `wpa_supplicant` WiFi backends. The inherited UI's 6 GHz label does not provide a separate 6 GHz selection; this mismatch and other open runtime findings are recorded in the [Stage 0 audit](docs/audits/2026-10-15-stage-0-findings.md).
+Want to go further? The remaining optimizations are available as individual toggles - each one has an **(i)** icon you can tap for an explanation of what it does and its tradeoffs. Advanced options include a 5 GHz band restriction, custom DNS, disabling IPv6, CAKE traffic shaping, and switching between the `iwd` and `wpa_supplicant` WiFi backends. Other open runtime findings are recorded in the [Stage 0 audit](docs/audits/2026-10-15-stage-0-findings.md).
 
 ## All optimizations
 
@@ -61,8 +61,8 @@ Want to go further? The remaining optimizations are available as individual togg
 
 | Optimization | What it does | Why it's manual |
 |---|---|---|
-| Force 5 GHz | Restricts the saved WiFi profile to the 5 GHz band | Won't connect if your network is 2.4 GHz only; the inherited 6 GHz UI claim is under correction |
-| Traffic shaping (CAKE) | Replaces the default network queue with CAKE for fair queuing, bufferbloat prevention, and ACK filtering. Does not limit bandwidth. | Replaces your system's default qdisc; resets on reboot |
+| Force 5 GHz | Restricts the saved WiFi profile to the 5 GHz band | Won't connect if your network is 2.4 GHz only |
+| Traffic shaping (CAKE) | Local egress qdisc ("cake unlimited ...", no bandwidth limit set). No control over other devices or external bottleneck. | Replaces your system's default qdisc; resets on reboot |
 | Custom DNS | Overrides your ISP's DNS with Cloudflare, Google, Quad9, or custom servers | Requires choosing a provider |
 | Disable IPv6 | Forces all traffic through IPv4 | Only helps on networks with broken IPv6 - most are fine |
 | WiFi backend (iwd / wpa_supplicant) | Switches between installed NetworkManager WiFi backends. The OS version and installation history determine the default; detect the actual backend. | Availability, sleep/wake behavior and compatibility with WPA3 or enterprise networks vary; review and test before switching |

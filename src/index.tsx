@@ -713,7 +713,6 @@ function Content() {
   const supportTier = status?.support_tier ?? 1;
   const driftCount = status?.drift ? Object.keys(status.drift).length : 0;
   const unknownOwners = status?.unknown_owners ?? [];
-  const supports6GHz = s?.supports_6ghz ?? false;
   const isDeckLcd = s?.device_family === "deck_lcd";
   // Mutation lock: normal busy state plus a stuck backend-switch poll
   // failure (backendSwitch.error), which holds controls until the next
@@ -958,13 +957,11 @@ function Content() {
       {/* Advanced */}
       <PanelSection title="Advanced">
         <InfoRow
-          label={supports6GHz ? "Force 5 GHz / 6 GHz" : "Force 5 GHz band"}
-          subtitle="Avoid 2.4 GHz Bluetooth interference"
-          explanation={`Bluetooth operates on the 2.4 GHz band${
+          label="Force 5 GHz band"
+          subtitle='Lock this profile to 5 GHz (NM band "a")'
+          explanation={`Sets NetworkManager 802-11-wireless.band to "a" on this saved profile. "a" means 5 GHz only — it will not use 2.4 GHz or 6 GHz for this network. Bluetooth operates on the 2.4 GHz band${
             isDeckLcd ? ", and on the Steam Deck LCD the antennas are shared" : ""
-          }. Using 5 GHz${
-            supports6GHz ? " or 6 GHz" : ""
-          } for WiFi avoids this interference entirely, giving you a cleaner, faster connection. Only enable this if your router supports 5 GHz. If your network is 2.4 GHz only, this will prevent you from connecting.`}
+          }. Using 5 GHz for WiFi avoids this interference entirely, giving you a cleaner, faster connection. Only enable this if your router supports 5 GHz. If your network is 2.4 GHz only, this will prevent you from connecting. 6 GHz ("6GHz") is a separate NM value and is not offered here.`}
           {...getBadge("band_preference", status, errors.band_preference ?? null)}
           checked={s?.band_preference_enabled ?? false}
           disabled={mutationLocked || (!connected && !s?.band_preference_enabled)}
@@ -1040,7 +1037,7 @@ function Content() {
         <InfoRow
           label="Traffic shaping (CAKE)"
           subtitle="Fair queuing and bufferbloat prevention"
-          explanation="Replaces the default network queue with CAKE, which isolates traffic flows so a background download or another device can't starve your game stream. Also filters redundant TCP acknowledgments and prioritizes latency-sensitive packets. Does not limit your bandwidth. Resets on reboot and is reapplied automatically if auto-fix on wake is enabled."
+          explanation='Replaces the egress qdisc on this device with CAKE "unlimited diffserv4 nat ack-filter" (no bandwidth limit set). It only orders packets leaving this device; it cannot control other devices, the access point, or the ISP bottleneck, and any effect needs measurement under load. Resets on reboot and is reapplied automatically if auto-fix on wake is enabled.'
           {...getBadge("cake", status, errors.cake ?? null)}
           checked={s?.cake_enabled ?? false}
           disabled={mutationLocked || (!connected && !s?.cake_enabled)}
