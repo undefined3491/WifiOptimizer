@@ -573,24 +573,59 @@ class BackendStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("effective_mismatch", result.get("errors") or [])
 
     async def test_failed_repair_rolls_back_reported(self):
-        f = self.fixture()
-        f.set_conf("generic", "iwd")
-        f.set_services(iwd_active="inactive", wpa_active="active")
-        f.seed_snapshot({
-            "backend": {"backend": "wpa_supplicant", "services": {}},
-            "file_backend_conf": {"exists": False, "content": None},
-        })
-        f.plugin._backend_switch["repair_of"] = "iwd"
-        f.fail_command(SYSTEMCTL, "start", "iwd",
-                       stderr="Job for iwd.service failed")
-        result = await f.run_generic("iwd")
-        self.assertFalse(result["success"])
-        self.assertEqual(result.get("repair_of"), "iwd")
-        self.assertTrue(result.get("rolled_back"))
-        # Previous layer uncovered: the generic conf is gone again.
-        self.assertIsNone(f.read_conf_file("generic"))
-        self.assertIn([SYSTEMCTL, "enable", "wpa_supplicant"], f.run_calls)
-        self.assertIn([SYSTEMCTL, "start", "wpa_supplicant"], f.run_calls)
+        scenarios = ("generic", "steamos")
+        for route in scenarios:
+            with self.subTest(route=route):
+                f = self.fixture()
+                if route == "generic":
+                    f.set_conf("generic", "iwd")
+                else:
+                    f.seed_settings(distro_id="steamos")
+                    f.helper_present = True
+                    f.helper_executable = True
+                    f.set_conf("valve", "iwd")
+                    f.script_command(_ok("ok"),
+                                     f.BACKEND_HELPER, "write_config", "iwd")
+                    f.script_command(_ok("units restarted"),
+                                     f.BACKEND_HELPER, "restart_units",
+                                     "wpa_supplicant")
+                    f.script_command(_ok("ok"),
+                                     f.BACKEND_HELPER, "write_config",
+                                     "wpa_supplicant")
+                    f.script_command(_ok("units restarted"),
+                                     f.BACKEND_HELPER, "restart_units", "iwd")
+                    f.script_command([_ok("inactive\n"), _ok("inactive\n")],
+                                     SYSTEMCTL, "is-active", "iwd")
+                    f.script_command([_ok("inactive\n"), _ok("active\n")],
+                                     SYSTEMCTL, "is-active", "wpa_supplicant")
+                f.set_services(iwd_active="inactive", wpa_active="active")
+                f.seed_snapshot({
+                    "backend": {"backend": "wpa_supplicant", "services": {}},
+                    "file_backend_conf": {"exists": False, "content": None},
+                })
+                f.plugin._backend_switch["repair_of"] = "iwd"
+                f.fail_command(SYSTEMCTL, "start", "iwd",
+                               stderr="Job for iwd.service failed")
+                if route == "generic":
+                    result = await f.run_generic("iwd")
+                else:
+                    result = await f.run_steamos("iwd")
+                self.assertFalse(result["success"])
+                self.assertEqual(result.get("repair_of"), "iwd")
+                self.assertTrue(result.get("rolled_back"))
+                self.assertEqual(result.get("backend"), "wpa_supplicant")
+                self.assertIn([SYSTEMCTL, "enable", "wpa_supplicant"],
+                              f.run_calls)
+                self.assertIn([SYSTEMCTL, "start", "wpa_supplicant"],
+                              f.run_calls)
+                if route == "generic":
+                    # Previous layer uncovered: the generic conf is gone again.
+                    self.assertIsNone(f.read_conf_file("generic"))
+                else:
+                    # Previous target restored through the helper route.
+                    self.assertIn(
+                        [f.BACKEND_HELPER, "write_config", "wpa_supplicant"],
+                        f.run_calls)
 
     async def test_status_shows_both_with_drift(self):
         f = self.fixture()
