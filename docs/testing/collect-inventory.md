@@ -4,6 +4,8 @@ The standalone [collector](../../scripts/collect_deck_inventory.py) supports the
 
 ## Run on the Deck
 
+This procedure requires neither SSH nor CEF/React debugging. The [verified Decky workflow](decky-development-workflow.md) explains those complementary tools; the inventory can run directly in Konsole.
+
 1. Copy the reviewed `scripts/collect_deck_inventory.py` file to the Deck. It does not need installation as a plugin. Open Konsole in the directory containing that file.
 2. Use the actual Decky home directory. On a standard installation for the logged-in Deck user this is `$HOME/homebrew`; a custom installation needs its actual absolute path. Expand this argument in the user's shell before `sudo`; the collector does not guess a username or use root's home directory.
 3. Close the WiFi Optimizer panel and avoid applying settings, starting games or deliberately reconnecting during collection. Collection does not freeze other system/plugin activity, so it is explicitly a non-atomic snapshot.

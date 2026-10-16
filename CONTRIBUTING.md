@@ -8,6 +8,8 @@ Merging does not publish a release. Documentation and CI-only changes do not nee
 
 ## Local checks and generated files
 
+Device development uses the [documented Decky debugging workflow](docs/testing/decky-development-workflow.md): CEF for frontend inspection, optional standalone React DevTools, and Konsole or optional SSH for Linux/backend work. The Stage 0 inventory needs no remote-debugging or SSH setup. Native ZIP installation must account for this plugin's unresolved uninstall/restoration findings.
+
 Use Node.js and pnpm 9. Install from the frozen lockfile and run the same build and source type check used by CI:
 
 ```bash

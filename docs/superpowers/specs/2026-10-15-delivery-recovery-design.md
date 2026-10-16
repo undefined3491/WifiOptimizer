@@ -12,6 +12,8 @@ The owner selected `WiFi Optimizer TMS` and repository/package `wifi-optimizer-t
 
 ## Selected architecture
 
+This is a proposed specialized architecture, not the standard Decky development workflow. Follow the [platform workflow comparison](../../testing/decky-development-workflow.md), checked on 2026-10-16. Before owner approval and implementation, explicitly compare retaining the inherited self-updater with Decky's ZIP/Store lifecycle after correcting uninstall/ownership. Loader 3.2.10 package replacement can invoke `_uninstall()`, so native installation alone does not resolve our restoration findings. This document does not authorize removing the inherited updater or changing the agreed release channels. The engine below is conditional on selecting the retained-self-updater approach; it must not be presented as a prerequisite for CEF debugging or local inventory.
+
 Use a standalone standard-library Python recovery engine shared by manual installation and in-app updates. Keep Decky adapters small; never import `main.py` to run the engine. Replace the generated `/tmp` shell script and in-place copying. Execute a private snapshot of the engine in an independent transient **system** service, outside the `plugin_loader` cgroup and installation tree. `Popen(start_new_session=True)` alone is insufficient lifecycle isolation.
 
 | Component | Responsibility |
