@@ -518,9 +518,9 @@ class RestorationFixture:
                 return _ok("")
             if cmd[1:3] == ["con", "up"]:
                 return _ok("")
-            if "-t" in cmd:
-                field = cmd[cmd.index("-t") + 1]
-                rest = cmd[cmd.index("-t") + 2 :]
+            if "-f" in cmd:
+                field = cmd[cmd.index("-f") + 1]
+                rest = cmd[cmd.index("-f") + 2 :]
                 if rest[:2] == ["dev", "status"]:
                     if self.iface:
                         return _ok(f"{self.iface}:wifi")

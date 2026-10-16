@@ -921,6 +921,13 @@ class Plugin:
             _save_settings(settings)
 
             if settings.get("auto_fix_on_wake", True):
+                try:
+                    self._capture_slot("file_dispatcher")
+                except Exception as e:
+                    decky.logger.info(
+                        "snapshot capture skipped for file_dispatcher: "
+                        f"{e}"
+                    )
                 self._install_dispatcher()
 
             # Apply volatile settings that may have been lost on reboot.
@@ -1160,12 +1167,30 @@ class Plugin:
         """Best-effort clear of `clears` [(key, value)] on a previous owner
         profile after an enable moved ownership to `uuid`. Returns
         `transfer_warnings` (one `key: stderr` entry per failed clear).
-        Never fails the enable; never reconnects the old profile."""
+        Never fails the enable; never reconnects the old profile.
+
+        The value written is the profile's snapshotted prior value when
+        present, else the caller-supplied assumed default (no owner-model
+        change; failures still use the existing transfer_warnings shape).
+        """
         warnings = []
         if not prev_uuid or prev_uuid == uuid:
             return warnings
+        try:
+            snapshot = _load_snapshot()
+        except Exception:
+            snapshot = {}
+        if not isinstance(snapshot, dict):
+            snapshot = {}
         for key, value in clears:
-            result = self._nmcli_modify(prev_uuid, key, value)
+            target = value
+            try:
+                slot = snapshot.get(f"profile_{prev_uuid}_{key}")
+                if isinstance(slot, dict) and "value" in slot:
+                    target = slot["value"]
+            except Exception:
+                pass
+            result = self._nmcli_modify(prev_uuid, key, target)
             if not result["success"]:
                 detail = result.get("stderr", "")
                 warnings.append(f"{key}: {detail}")
@@ -1447,62 +1472,194 @@ class Plugin:
 
     async def set_power_save(self, disabled: bool) -> dict:
         try:
-
-            iface = self._get_wifi_interface()
-
-            # Apply immediately if connected - verify before saving
-            if iface:
-                state = "off" if disabled else "on"
-                result = self._run_cmd(
-                    ["/usr/bin/iw", "dev", iface, "set", "power_save", state]
-                )
-                if not result["success"]:
-                    return {
-                        "success": False,
-                        "error": "iw_failed",
-                        "message": "Couldn't change WiFi power save",
-                        "detail": result["stderr"],
-                    }
-
-            # Write or remove NM config (persistent layer)
+            errors = []
             if disabled:
+                # Capture-before-first-write for every domain this path
+                # touches. Slot-once: never overwrites an existing baseline.
+                for slot_name in (
+                    "power_save",
+                    "file_nm_conf",
+                    "pcie",
+                    "driver_sysfs",
+                    "file_modprobe_conf",
+                ):
+                    try:
+                        self._capture_slot(slot_name)
+                    except Exception as e:
+                        decky.logger.info(
+                            f"snapshot capture skipped for {slot_name}: {e}"
+                        )
+
+                iface = self._get_wifi_interface()
+
+                # Apply immediately if connected - verify before saving
+                if iface:
+                    state = "off"
+                    result = self._run_cmd(
+                        ["/usr/bin/iw", "dev", iface, "set", "power_save", state]
+                    )
+                    if not result["success"]:
+                        return {
+                            "success": False,
+                            "error": "iw_failed",
+                            "message": "Couldn't change WiFi power save",
+                            "detail": result["stderr"],
+                            "errors": errors,
+                        }
+
+                # Write or remove NM config (persistent layer)
                 os.makedirs(os.path.dirname(NM_CONF_PATH), exist_ok=True)
                 with open(NM_CONF_PATH, "w") as f:
                     f.write("[connection]\nwifi.powersave = 2\n")
-            else:
+
+                self._apply_driver_fixes(True)
+                self._apply_pcie_aspm_fix(True)
+
+                # Save settings only after success
+                settings = _load_settings()
+                settings["power_save_disabled"] = True
+                _save_settings_with_timestamp(settings)
+
+                return {
+                    "success": True,
+                    "power_save_off": True,
+                    "errors": errors,
+                }
+
+            # Disabler: owned-only restore. When this version never enabled
+            # the domain (flag already false) there is nothing to restore:
+            # intent-only, zero writes, foreign state untouched.
+            settings = _load_settings()
+            if not settings.get("power_save_disabled"):
+                return {"success": True, "power_save_off": False, "errors": errors}
+
+            iface = self._get_wifi_interface()
+            restore_err = None
+            try:
+                restore_err = self._restore_slot("power_save")
+            except Exception as e:
+                restore_err = f"snapshot unavailable: {e}"
+            if restore_err is not None:
+                decky.logger.info(
+                    f"snapshot restore fallback for power_save: {restore_err}"
+                )
+                errors.append("fallback:power_save")
+                if iface:
+                    result = self._run_cmd(
+                        ["/usr/bin/iw", "dev", iface, "set", "power_save", "on"]
+                    )
+                    if not result["success"]:
+                        return {
+                            "success": False,
+                            "error": "iw_failed",
+                            "message": "Couldn't change WiFi power save",
+                            "detail": result["stderr"],
+                            "errors": errors,
+                        }
+
+            try:
+                restore_err = self._restore_slot("file_nm_conf")
+            except Exception as e:
+                restore_err = f"snapshot unavailable: {e}"
+            if restore_err is not None:
+                decky.logger.info(
+                    f"snapshot restore fallback for file_nm_conf: {restore_err}"
+                )
+                errors.append("fallback:file_nm_conf")
                 try:
                     os.remove(NM_CONF_PATH)
                 except FileNotFoundError:
                     pass
 
-            self._apply_driver_fixes(disabled)
-            self._apply_pcie_aspm_fix(disabled)
+            try:
+                restore_err = self._restore_slot("driver_sysfs")
+            except Exception as e:
+                restore_err = f"snapshot unavailable: {e}"
+            if restore_err is not None:
+                decky.logger.info(
+                    f"snapshot restore fallback for driver_sysfs: {restore_err}"
+                )
+                errors.append("fallback:driver_sysfs")
+                self._apply_driver_fixes(False)
+
+            try:
+                restore_err = self._restore_slot("file_modprobe_conf")
+            except Exception as e:
+                restore_err = f"snapshot unavailable: {e}"
+            if restore_err is not None:
+                decky.logger.info(
+                    "snapshot restore fallback for file_modprobe_conf: "
+                    f"{restore_err}"
+                )
+                errors.append("fallback:file_modprobe_conf")
+                try:
+                    os.remove(MODPROBE_CONF_PATH)
+                except FileNotFoundError:
+                    pass
+
+            try:
+                restore_err = self._restore_slot("pcie")
+            except Exception as e:
+                restore_err = f"snapshot unavailable: {e}"
+            if restore_err is not None:
+                decky.logger.info(
+                    f"snapshot restore fallback for pcie: {restore_err}"
+                )
+                errors.append("fallback:pcie")
+                self._apply_pcie_aspm_fix(False)
 
             # Save settings only after success
             settings = _load_settings()
-            settings["power_save_disabled"] = disabled
+            settings["power_save_disabled"] = False
             _save_settings_with_timestamp(settings)
 
-            return {"success": True, "power_save_off": disabled}
+            return {"success": True, "power_save_off": False, "errors": errors}
         except Exception as e:
             decky.logger.error(f"set_power_save error: {e}")
             return self._unexpected_response(e)
 
     async def set_auto_fix(self, enabled: bool) -> dict:
         try:
-
+            errors = []
             settings = _load_settings()
-            settings["auto_fix_on_wake"] = enabled
 
             if enabled:
+                try:
+                    self._capture_slot("file_dispatcher")
+                except Exception as e:
+                    decky.logger.info(
+                        f"snapshot capture skipped for file_dispatcher: {e}"
+                    )
                 self._install_dispatcher()
             else:
-                self._remove_dispatcher()
+                # Owned-only: a flag that is already false means this
+                # version did not install the dispatcher; leave whatever
+                # is there untouched.
+                if not settings.get("auto_fix_on_wake"):
+                    return {
+                        "success": True,
+                        "dispatcher_installed": os.path.isfile(DISPATCHER_PATH),
+                        "errors": errors,
+                    }
+                restore_err = None
+                try:
+                    restore_err = self._restore_slot("file_dispatcher")
+                except Exception as e:
+                    restore_err = f"snapshot unavailable: {e}"
+                if restore_err is not None:
+                    decky.logger.info(
+                        "snapshot restore fallback for file_dispatcher: "
+                        f"{restore_err}"
+                    )
+                    errors.append("fallback:file_dispatcher")
+                    self._remove_dispatcher()
 
+            settings["auto_fix_on_wake"] = enabled
             _save_settings_with_timestamp(settings)
             return {
                 "success": True,
                 "dispatcher_installed": os.path.isfile(DISPATCHER_PATH),
+                "errors": errors,
             }
         except Exception as e:
             decky.logger.error(f"set_auto_fix error: {e}")
@@ -1510,6 +1667,7 @@ class Plugin:
 
     async def set_bssid_lock(self, enabled: bool) -> dict:
         try:
+            errors = []
             settings = _load_settings()
 
             if enabled:
@@ -1549,6 +1707,13 @@ class Plugin:
                     }
 
                 prev_owner = settings.get("bssid_lock_connection_uuid") or ""
+                slot_name = f"profile_{uuid}_802-11-wireless.bssid"
+                try:
+                    self._capture_slot(slot_name)
+                except Exception as e:
+                    decky.logger.info(
+                        f"snapshot capture skipped for {slot_name}: {e}"
+                    )
                 result = self._nmcli_modify(uuid, "802-11-wireless.bssid", bssid)
                 if not result["success"]:
                     return {
@@ -1573,32 +1738,53 @@ class Plugin:
                     "bssid_locked": True,
                     "reconnected": True,
                     "transfer_warnings": transfer_warnings,
+                    "errors": errors,
                 }
             else:
                 # Disabling targets the owner profile (never the foreign
                 # active one, never "last seen"); works offline.
                 owner = settings.get("bssid_lock_connection_uuid") or ""
                 if not owner:
+                    decky.logger.info(
+                        "snapshot restore fallback for bssid_lock: "
+                        "unknown owner, intent-only clear"
+                    )
                     settings["bssid_lock_enabled"] = False
                     _save_settings_with_timestamp(settings)
                     return {
                         "success": True,
                         "bssid_locked": False,
                         "reconnected": False,
+                        "errors": errors,
                     }
 
                 uuid, err = self._resolve_uuid(owner)
                 if err:
                     return err
 
-                result = self._nmcli_modify(uuid, "802-11-wireless.bssid", "")
-                if not result["success"]:
-                    return {
-                        "success": False,
-                        "error": "nmcli_failed",
-                        "message": "Couldn't unlock BSSID",
-                        "detail": result["stderr"],
-                    }
+                slot_name = f"profile_{uuid}_802-11-wireless.bssid"
+                restore_err = None
+                try:
+                    restore_err = self._restore_slot(slot_name)
+                except Exception as e:
+                    restore_err = f"snapshot unavailable: {e}"
+                if restore_err is not None:
+                    decky.logger.info(
+                        f"snapshot restore fallback for {slot_name}: "
+                        f"{restore_err}"
+                    )
+                    errors.append(f"fallback:{slot_name}")
+                    result = self._nmcli_modify(
+                        uuid, "802-11-wireless.bssid", ""
+                    )
+                    if not result["success"]:
+                        return {
+                            "success": False,
+                            "error": "nmcli_failed",
+                            "message": "Couldn't unlock BSSID",
+                            "detail": result["stderr"],
+                            "errors": errors,
+                        }
 
                 settings = _load_settings()
                 settings["bssid_lock_enabled"] = False
@@ -1610,13 +1796,19 @@ class Plugin:
                 if reconnected:
                     self._hard_reconnect(uuid)
 
-            return {"success": True, "bssid_locked": enabled, "reconnected": reconnected}
+            return {
+                "success": True,
+                "bssid_locked": enabled,
+                "reconnected": reconnected,
+                "errors": errors,
+            }
         except Exception as e:
             decky.logger.error(f"set_bssid_lock error: {e}")
             return self._unexpected_response(e)
 
     async def set_band_preference(self, enabled: bool, band: str = "a") -> dict:
         try:
+            errors = []
             if enabled and band not in ("a", "bg"):
                 return {
                     "success": False,
@@ -1648,6 +1840,13 @@ class Plugin:
 
                 prev_owner = settings.get("band_owner_uuid") or ""
                 value = band
+                slot_name = f"profile_{uuid}_802-11-wireless.band"
+                try:
+                    self._capture_slot(slot_name)
+                except Exception as e:
+                    decky.logger.info(
+                        f"snapshot capture skipped for {slot_name}: {e}"
+                    )
                 result = self._nmcli_modify(uuid, "802-11-wireless.band", value)
                 if not result["success"]:
                     return {
@@ -1718,26 +1917,48 @@ class Plugin:
                     "band": value,
                     "reconnected": True,
                     "transfer_warnings": transfer_warnings,
+                    "errors": errors,
                 }
 
             owner = settings.get("band_owner_uuid") or ""
             if not owner:
+                decky.logger.info(
+                    "snapshot restore fallback for band_preference: "
+                    "unknown owner, intent-only clear"
+                )
                 settings["band_preference_enabled"] = False
                 _save_settings_with_timestamp(settings)
-                return {"success": True, "band": "", "reconnected": False}
+                return {
+                    "success": True,
+                    "band": "",
+                    "reconnected": False,
+                    "errors": errors,
+                }
 
             uuid, err = self._resolve_uuid(owner)
             if err:
                 return err
 
-            result = self._nmcli_modify(uuid, "802-11-wireless.band", "")
-            if not result["success"]:
-                return {
-                    "success": False,
-                    "error": "nmcli_failed",
-                    "message": "Couldn't update band preference",
-                    "detail": result["stderr"],
-                }
+            slot_name = f"profile_{uuid}_802-11-wireless.band"
+            restore_err = None
+            try:
+                restore_err = self._restore_slot(slot_name)
+            except Exception as e:
+                restore_err = f"snapshot unavailable: {e}"
+            if restore_err is not None:
+                decky.logger.info(
+                    f"snapshot restore fallback for {slot_name}: {restore_err}"
+                )
+                errors.append(f"fallback:{slot_name}")
+                result = self._nmcli_modify(uuid, "802-11-wireless.band", "")
+                if not result["success"]:
+                    return {
+                        "success": False,
+                        "error": "nmcli_failed",
+                        "message": "Couldn't update band preference",
+                        "detail": result["stderr"],
+                        "errors": errors,
+                    }
 
             settings = _load_settings()
             settings["band_preference_enabled"] = False
@@ -1748,7 +1969,12 @@ class Plugin:
             reconnected = bool(active_uuid and active_uuid == uuid)
             if reconnected:
                 self._hard_reconnect(uuid)
-            return {"success": True, "band": "", "reconnected": reconnected}
+            return {
+                "success": True,
+                "band": "",
+                "reconnected": reconnected,
+                "errors": errors,
+            }
         except Exception as e:
             decky.logger.error(f"set_band_preference error: {e}")
             return self._unexpected_response(e)
@@ -1757,6 +1983,7 @@ class Plugin:
         self, enabled: bool, provider: str = "cloudflare", custom_servers: str = ""
     ) -> dict:
         try:
+            errors = []
             settings = _load_settings()
 
             if enabled:
@@ -1793,6 +2020,16 @@ class Plugin:
                     }
 
                 prev_owner = settings.get("dns_owner_uuid") or ""
+                for slot_name in (
+                    f"profile_{uuid}_ipv4.dns",
+                    f"profile_{uuid}_ipv4.ignore-auto-dns",
+                ):
+                    try:
+                        self._capture_slot(slot_name)
+                    except Exception as e:
+                        decky.logger.info(
+                            f"snapshot capture skipped for {slot_name}: {e}"
+                        )
                 result = self._nmcli_modify(uuid, "ipv4.dns", servers)
                 if not result["success"]:
                     return {
@@ -1830,34 +2067,53 @@ class Plugin:
                     "dns_set": True,
                     "reconnected": True,
                     "transfer_warnings": transfer_warnings,
+                    "errors": errors,
                 }
 
             owner = settings.get("dns_owner_uuid") or ""
             if not owner:
+                decky.logger.info(
+                    "snapshot restore fallback for dns: "
+                    "unknown owner, intent-only clear"
+                )
                 settings["dns_enabled"] = False
                 _save_settings_with_timestamp(settings)
-                return {"success": True, "dns_set": False, "reconnected": False}
+                return {
+                    "success": True,
+                    "dns_set": False,
+                    "reconnected": False,
+                    "errors": errors,
+                }
 
             uuid, err = self._resolve_uuid(owner)
             if err:
                 return err
 
-            result = self._nmcli_modify(uuid, "ipv4.dns", "")
-            if not result["success"]:
-                return {
-                    "success": False,
-                    "error": "nmcli_failed",
-                    "message": "Couldn't clear DNS",
-                    "detail": result["stderr"],
-                }
-            result2 = self._nmcli_modify(uuid, "ipv4.ignore-auto-dns", "no")
-            if not result2["success"]:
-                return {
-                    "success": False,
-                    "error": "nmcli_failed",
-                    "message": "Couldn't clear DNS",
-                    "detail": result2["stderr"],
-                }
+            for key, default in (
+                ("ipv4.dns", ""),
+                ("ipv4.ignore-auto-dns", "no"),
+            ):
+                slot_name = f"profile_{uuid}_{key}"
+                restore_err = None
+                try:
+                    restore_err = self._restore_slot(slot_name)
+                except Exception as e:
+                    restore_err = f"snapshot unavailable: {e}"
+                if restore_err is None:
+                    continue
+                decky.logger.info(
+                    f"snapshot restore fallback for {slot_name}: {restore_err}"
+                )
+                errors.append(f"fallback:{slot_name}")
+                result = self._nmcli_modify(uuid, key, default)
+                if not result["success"]:
+                    return {
+                        "success": False,
+                        "error": "nmcli_failed",
+                        "message": "Couldn't clear DNS",
+                        "detail": result["stderr"],
+                        "errors": errors,
+                    }
 
             settings = _load_settings()
             settings["dns_enabled"] = False
@@ -1868,13 +2124,19 @@ class Plugin:
             reconnected = bool(active_uuid and active_uuid == uuid)
             if reconnected:
                 self._hard_reconnect(uuid)
-            return {"success": True, "dns_set": False, "reconnected": reconnected}
+            return {
+                "success": True,
+                "dns_set": False,
+                "reconnected": reconnected,
+                "errors": errors,
+            }
         except Exception as e:
             decky.logger.error(f"set_dns error: {e}")
             return self._unexpected_response(e)
 
     async def set_ipv6(self, disabled: bool) -> dict:
         try:
+            errors = []
             settings = _load_settings()
 
             if disabled:
@@ -1898,6 +2160,13 @@ class Plugin:
                     return err
 
                 prev_owner = settings.get("ipv6_owner_uuid") or ""
+                slot_name = f"profile_{uuid}_ipv6.method"
+                try:
+                    self._capture_slot(slot_name)
+                except Exception as e:
+                    decky.logger.info(
+                        f"snapshot capture skipped for {slot_name}: {e}"
+                    )
                 result = self._nmcli_modify(uuid, "ipv6.method", "disabled")
                 if not result["success"]:
                     return {
@@ -1922,26 +2191,48 @@ class Plugin:
                     "ipv6_disabled": True,
                     "reconnected": True,
                     "transfer_warnings": transfer_warnings,
+                    "errors": errors,
                 }
 
             owner = settings.get("ipv6_owner_uuid") or ""
             if not owner:
+                decky.logger.info(
+                    "snapshot restore fallback for ipv6: "
+                    "unknown owner, intent-only clear"
+                )
                 settings["ipv6_disabled"] = False
                 _save_settings_with_timestamp(settings)
-                return {"success": True, "ipv6_disabled": False, "reconnected": False}
+                return {
+                    "success": True,
+                    "ipv6_disabled": False,
+                    "reconnected": False,
+                    "errors": errors,
+                }
 
             uuid, err = self._resolve_uuid(owner)
             if err:
                 return err
 
-            result = self._nmcli_modify(uuid, "ipv6.method", "auto")
-            if not result["success"]:
-                return {
-                    "success": False,
-                    "error": "nmcli_failed",
-                    "message": "Couldn't update IPv6 setting",
-                    "detail": result["stderr"],
-                }
+            slot_name = f"profile_{uuid}_ipv6.method"
+            restore_err = None
+            try:
+                restore_err = self._restore_slot(slot_name)
+            except Exception as e:
+                restore_err = f"snapshot unavailable: {e}"
+            if restore_err is not None:
+                decky.logger.info(
+                    f"snapshot restore fallback for {slot_name}: {restore_err}"
+                )
+                errors.append(f"fallback:{slot_name}")
+                result = self._nmcli_modify(uuid, "ipv6.method", "auto")
+                if not result["success"]:
+                    return {
+                        "success": False,
+                        "error": "nmcli_failed",
+                        "message": "Couldn't update IPv6 setting",
+                        "detail": result["stderr"],
+                        "errors": errors,
+                    }
 
             settings = _load_settings()
             settings["ipv6_disabled"] = False
@@ -1956,6 +2247,7 @@ class Plugin:
                 "success": True,
                 "ipv6_disabled": False,
                 "reconnected": reconnected,
+                "errors": errors,
             }
         except Exception as e:
             decky.logger.error(f"set_ipv6 error: {e}")
@@ -1963,30 +2255,99 @@ class Plugin:
 
     async def set_buffer_tuning(self, enabled: bool) -> dict:
         try:
-
-            params = SYSCTL_PARAMS if enabled else SYSCTL_DEFAULTS
-            for key, value in params.items():
-                result = self._run_cmd(
-                    ["/usr/bin/sysctl", "-w", f"{key}={value}"]
-                )
-                if not result["success"]:
-                    decky.logger.error(f"sysctl {key}={value} failed: {result['stderr']}")
+            errors = []
+            if enabled:
+                # Capture-before-first-write (sysctl always; txq needs wifi).
+                for slot_name in ("sysctl", "txqueuelen"):
+                    try:
+                        self._capture_slot(slot_name)
+                    except Exception as e:
+                        decky.logger.info(
+                            f"snapshot capture skipped for {slot_name}: {e}"
+                        )
+                params = SYSCTL_PARAMS
+                for key, value in params.items():
+                    result = self._run_cmd(
+                        ["/usr/bin/sysctl", "-w", f"{key}={value}"]
+                    )
+                    if not result["success"]:
+                        decky.logger.error(f"sysctl {key}={value} failed: {result['stderr']}")
+            else:
+                # Owned-only: a flag that is already false means this
+                # version never tuned the buffers; leave live state alone.
+                if not _load_settings().get("buffer_tuning_enabled"):
+                    return {
+                        "success": True,
+                        "buffer_tuning": False,
+                        "errors": errors,
+                    }
+                restore_err = None
+                try:
+                    restore_err = self._restore_slot("sysctl")
+                except Exception as e:
+                    restore_err = f"snapshot unavailable: {e}"
+                if restore_err is not None:
+                    decky.logger.info(
+                        f"snapshot restore fallback for sysctl: {restore_err}"
+                    )
+                    errors.append("fallback:sysctl")
+                    for key, value in SYSCTL_DEFAULTS.items():
+                        result = self._run_cmd(
+                            ["/usr/bin/sysctl", "-w", f"{key}={value}"]
+                        )
+                        if not result["success"]:
+                            decky.logger.error(
+                                f"sysctl {key}={value} failed: {result['stderr']}"
+                            )
 
             # TX queue length (CAKE needs 256; defer to it if active)
             iface = self._get_wifi_interface()
             settings = _load_settings()
             if iface:
-                if settings.get("cake_enabled"):
-                    txq = "256"
+                if enabled:
+                    if settings.get("cake_enabled"):
+                        txq = "256"
+                    else:
+                        txq = "2000"
+                    self._run_cmd(
+                        ["/usr/bin/ip", "link", "set", iface, "txqueuelen", txq]
+                    )
+                elif settings.get("cake_enabled"):
+                    # CAKE still owns the queue length; leave it at 256.
+                    self._run_cmd(
+                        ["/usr/bin/ip", "link", "set", iface, "txqueuelen", "256"]
+                    )
                 else:
-                    txq = "2000" if enabled else "1000"
-                self._run_cmd(
-                    ["/usr/bin/ip", "link", "set", iface, "txqueuelen", txq]
+                    restore_err = None
+                    try:
+                        restore_err = self._restore_slot("txqueuelen")
+                    except Exception as e:
+                        restore_err = f"snapshot unavailable: {e}"
+                    if restore_err is not None:
+                        decky.logger.info(
+                            "snapshot restore fallback for txqueuelen: "
+                            f"{restore_err}"
+                        )
+                        errors.append("fallback:txqueuelen")
+                        self._run_cmd(
+                            [
+                                "/usr/bin/ip",
+                                "link",
+                                "set",
+                                iface,
+                                "txqueuelen",
+                                "1000",
+                            ]
+                        )
+            elif not enabled:
+                decky.logger.info(
+                    "snapshot restore fallback for txqueuelen: no wifi interface"
                 )
+                errors.append("fallback:txqueuelen")
 
             settings["buffer_tuning_enabled"] = enabled
             _save_settings_with_timestamp(settings)
-            return {"success": True, "buffer_tuning": enabled}
+            return {"success": True, "buffer_tuning": enabled, "errors": errors}
         except Exception as e:
             decky.logger.error(f"set_buffer_tuning error: {e}")
             return self._unexpected_response(e)
@@ -1999,16 +2360,35 @@ class Plugin:
     async def set_cake(self, enabled: bool) -> dict:
         """Enable or disable CAKE QoS (unlimited mode: FQ + AQM + ack-filter, no bandwidth shaper)."""
         try:
+            errors = []
+            # Owned-only: a flag that is already false means this version
+            # never installed the qdisc; leave live state alone.
+            if not enabled and not _load_settings().get("cake_enabled"):
+                return {"success": True, "cake": False, "errors": errors}
             iface = self._get_wifi_interface()
             if not iface:
                 if enabled:
-                    return {"success": False, "error": "no_wifi", "message": "Not connected to WiFi."}
+                    return {"success": False, "error": "no_wifi", "message": "Not connected to WiFi.", "errors": errors}
+                decky.logger.info(
+                    "snapshot restore fallback for qdisc/txqueuelen: "
+                    "no wifi interface, intent-only clear"
+                )
+                errors.append("fallback:qdisc")
+                errors.append("fallback:txqueuelen")
                 settings = _load_settings()
                 settings["cake_enabled"] = False
                 _save_settings_with_timestamp(settings)
-                return {"success": True, "cake": False}
+                return {"success": True, "cake": False, "errors": errors}
 
             if enabled:
+                # Capture-before-first-write (qdisc + shared txqueuelen).
+                for slot_name in ("qdisc", "txqueuelen"):
+                    try:
+                        self._capture_slot(slot_name)
+                    except Exception as e:
+                        decky.logger.info(
+                            f"snapshot capture skipped for {slot_name}: {e}"
+                        )
                 modprobe = "/usr/bin/modprobe" if os.path.isfile("/usr/bin/modprobe") else "/usr/sbin/modprobe"
                 self._run_cmd([modprobe, "sch_cake"], timeout=5)
                 result = self._run_cmd([
@@ -2021,22 +2401,57 @@ class Plugin:
                         "error": "unexpected",
                         "message": "Failed to apply CAKE qdisc.",
                         "detail": result.get("stderr", ""),
+                        "errors": errors,
                     }
                 # Lower txqueuelen to complement CAKE's queue management
                 self._run_cmd(["/usr/bin/ip", "link", "set", iface, "txqueuelen", "256"])
                 decky.logger.info(f"CAKE enabled (unlimited) on {iface}")
             else:
-                self._run_cmd(["/usr/bin/tc", "qdisc", "del", "dev", iface, "root"])
+                restore_err = None
+                try:
+                    restore_err = self._restore_slot("qdisc")
+                except Exception as e:
+                    restore_err = f"snapshot unavailable: {e}"
+                if restore_err is not None:
+                    decky.logger.info(
+                        f"snapshot restore fallback for qdisc: {restore_err}"
+                    )
+                    errors.append("fallback:qdisc")
+                    self._run_cmd(["/usr/bin/tc", "qdisc", "del", "dev", iface, "root"])
                 # Restore txqueuelen based on whether buffer tuning is active
                 settings = _load_settings()
-                txq = "2000" if settings.get("buffer_tuning_enabled") else "1000"
-                self._run_cmd(["/usr/bin/ip", "link", "set", iface, "txqueuelen", txq])
+                if settings.get("buffer_tuning_enabled"):
+                    # Buffer tuning still owns the queue length.
+                    self._run_cmd(
+                        ["/usr/bin/ip", "link", "set", iface, "txqueuelen", "2000"]
+                    )
+                else:
+                    try:
+                        restore_err = self._restore_slot("txqueuelen")
+                    except Exception as e:
+                        restore_err = f"snapshot unavailable: {e}"
+                    if restore_err is not None:
+                        decky.logger.info(
+                            "snapshot restore fallback for txqueuelen: "
+                            f"{restore_err}"
+                        )
+                        errors.append("fallback:txqueuelen")
+                        self._run_cmd(
+                            [
+                                "/usr/bin/ip",
+                                "link",
+                                "set",
+                                iface,
+                                "txqueuelen",
+                                "1000",
+                            ]
+                        )
                 decky.logger.info(f"CAKE disabled on {iface}")
 
             settings = _load_settings()
             settings["cake_enabled"] = enabled
             _save_settings_with_timestamp(settings)
-            return {"success": True, "cake": enabled}
+            return {"success": True, "cake": enabled, "errors": errors}
         except Exception as e:
             decky.logger.error(f"set_cake error: {e}")
             return self._unexpected_response(e)
@@ -2464,6 +2879,15 @@ systemctl restart plugin_loader 2>/dev/null || true
         output to report whether recovery fired.
         """
         try:
+            # Snapshot-before-mutation: record the observed backend (and its
+            # service states for diagnosis) before the first write. Service
+            # state itself is never restored (ST0-009/delivery scope).
+            try:
+                self._capture_slot("backend")
+            except Exception as e:
+                decky.logger.info(
+                    f"snapshot capture skipped for backend: {e}"
+                )
             settings = _load_settings()
             has_wlan0_quirk = settings.get("driver") == "ath11k_pci"
             other = "iwd" if target == "wpa_supplicant" else "wpa_supplicant"
@@ -2599,6 +3023,15 @@ systemctl restart plugin_loader 2>/dev/null || true
         """Backend switch for non-SteamOS systems (Bazzite, CachyOS, etc.).
         Writes NM config directly and manages systemd services."""
         try:
+            # Snapshot-before-mutation: backend observation for diagnosis
+            # plus the generic conf file this worker overwrites below.
+            for slot_name in ("backend", "file_backend_conf"):
+                try:
+                    self._capture_slot(slot_name)
+                except Exception as e:
+                    decky.logger.info(
+                        f"snapshot capture skipped for {slot_name}: {e}"
+                    )
             other = "iwd" if target == "wpa_supplicant" else "wpa_supplicant"
 
             self._backend_switch["phase"] = "switching"
