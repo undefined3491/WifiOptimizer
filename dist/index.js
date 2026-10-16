@@ -121,6 +121,12 @@ const ERROR_MESSAGES = {
     pcie_failed: "Couldn't configure PCIe power management. Try again.",
     nm_conf_failed: "Couldn't write NetworkManager configuration. Try again.",
     timeout: "Command timed out. The system may be busy. Try again.",
+    backend_stop_failed: "Couldn't stop the current WiFi backend. Try again.",
+    backend_disable_failed: "Couldn't disable the current WiFi backend. Try again.",
+    backend_enable_failed: "Couldn't enable the new WiFi backend. Try again.",
+    backend_start_failed: "The new WiFi backend failed to start. Try again, or reboot if it keeps failing.",
+    nm_restart_failed: "Couldn't restart NetworkManager after the switch. Try again.",
+    effective_mismatch: "The backend switch didn't take effect. Try again, or reboot if it keeps failing.",
     write_failed: "Couldn't install auto-fix script. The filesystem may be locked.",
     parse_error: "Settings were reset to defaults.",
     unexpected: "Something went wrong. Check the Decky log for details.",
@@ -345,45 +351,77 @@ const EXPLANATION = "Your system defaults to iwd for WiFi management. Some devic
     "Note: some networks (WPA3-only, certain enterprise setups) behave " +
     "differently between backends - if your WiFi stops connecting after a " +
     "switch, try switching back.";
-function BackendToggleRow({ status, backendSwitch, error, isBusy, onToggle, }) {
-    const currentBackend = status.live?.wifi_backend || "iwd";
-    const isWpa = currentBackend === "wpa_supplicant";
+function BackendToggleRow({ status, backendSwitch, error, isBusy, onToggle, onRetry, }) {
+    // Desired vs effective (ST0-009 D7): config and reality are never
+    // conflated, and "" never silently defaults to iwd — unknown is an
+    // explicit branch (including when the backend tool is unavailable).
+    const toolAvailable = status.live?.backend_tool_available !== false;
+    const wiredDesired = status.live?.backend_desired;
+    const desired = toolAvailable && wiredDesired && wiredDesired !== "unknown"
+        ? wiredDesired
+        : toolAvailable && status.live?.wifi_backend
+            ? status.live.wifi_backend
+            : null;
+    const wiredEffective = status.live?.backend_effective;
+    const effective = toolAvailable && wiredEffective && wiredEffective !== "unknown"
+        ? wiredEffective
+        : null;
+    const diverged = desired !== null && effective !== null && desired !== effective;
+    const unknownEffective = desired !== null && effective === null;
+    const retryTarget = desired === "wpa_supplicant"
+        ? "wpa_supplicant"
+        : desired === "iwd"
+            ? "iwd"
+            : null;
+    const isWpa = desired === "wpa_supplicant";
     const switching = backendSwitch?.in_progress ?? false;
     // Optimistic: during a switch, reflect the target so the toggle matches
     // the user's click until the operation completes. On failure, it snaps
-    // back to the actual backend.
-    const checked = switching && backendSwitch?.target
+    // back to the actual backend. A same-target retry never takes the
+    // optimistic position: the toggle already sits at the desired value, so
+    // the row stays put until effective confirms the repair.
+    const retryInFlight = switching &&
+        backendSwitch?.target != null &&
+        backendSwitch.target === desired;
+    const checked = !retryInFlight && switching && backendSwitch?.target
         ? backendSwitch.target === "wpa_supplicant"
         : isWpa;
     const phaseText = switching
         ? PHASE_TEXT[backendSwitch.phase] || "Working…"
         : null;
+    const baseSubtitle = diverged
+        ? `Configured ${desired} · effective ${effective} — switch didn't take effect`
+        : unknownEffective
+            ? `Configured ${desired} · effective unknown`
+            : "Alternate WiFi backend - can fix sleep/wake and stability issues";
     const badge = error
         ? { badge: "error", text: "failed" }
         : switching
             ? { badge: "unknown", text: "…" }
-            : isWpa
-                ? { badge: "active", text: "wpa_supplicant" }
-                : { badge: "off", text: "iwd" };
+            : desired === null
+                ? { badge: "unknown", text: "unknown" }
+                : isWpa
+                    ? { badge: "active", text: "wpa_supplicant" }
+                    : { badge: "off", text: "iwd" };
     // Inline result shown right under the toggle so it's visible where the
     // user clicked - the top-of-panel banner is often off-screen when the
     // user is scrolled down to the Advanced section.
     const lastResult = !switching && !error && backendSwitch?.result && !backendSwitch.result.needs_reboot
         ? backendSwitch.result
         : null;
-    return (SP_JSX.jsx(InfoRow, { label: "Use wpa_supplicant backend", subtitle: phaseText ?? "Alternate WiFi backend - can fix sleep/wake and stability issues", explanation: EXPLANATION, badge: badge.badge, text: badge.text, checked: checked, disabled: switching || isBusy, error: error, onChange: onToggle, children: lastResult?.success && (() => {
-            const timedOut = lastResult.reconnect_timed_out;
-            const parts = [`Switched to ${lastResult.backend}`];
-            if (lastResult.recovery_performed)
-                parts.push("wlan0 interface recreated");
-            if (timedOut)
-                parts.push("WiFi didn't reconnect");
-            return (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: {
-                        fontSize: theme.fontSize.small,
-                        color: timedOut ? theme.warning.text : theme.success.text,
-                        padding: "2px 0",
-                    }, children: [timedOut ? "⚠" : "✓", " ", parts.join(" · ")] }) }));
-        })() }));
+    return (SP_JSX.jsxs(InfoRow, { label: "Use wpa_supplicant backend", subtitle: phaseText ?? baseSubtitle, explanation: EXPLANATION, badge: badge.badge, text: badge.text, checked: checked, disabled: switching || isBusy, error: error, onChange: onToggle, children: [retryTarget !== null && (diverged || unknownEffective) && !switching && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: isBusy, onClick: () => onRetry(retryTarget), children: `Retry switch to ${retryTarget}` }) })), lastResult?.success && (() => {
+                const timedOut = lastResult.reconnect_timed_out;
+                const parts = [`Switched to ${lastResult.backend}`];
+                if (lastResult.recovery_performed)
+                    parts.push("wlan0 interface recreated");
+                if (timedOut)
+                    parts.push("WiFi didn't reconnect");
+                return (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: {
+                            fontSize: theme.fontSize.small,
+                            color: timedOut ? theme.warning.text : theme.success.text,
+                            padding: "2px 0",
+                        }, children: [timedOut ? "⚠" : "✓", " ", parts.join(" · ")] }) }));
+            })()] }));
 }
 
 const CHANNEL_OPTIONS = [
@@ -1068,6 +1106,16 @@ function Content() {
             console.error("startBackendSwitch error", e);
         }
     };
+    // Divergence retry (ST0-009 D7): re-run the switch toward the configured
+    // backend; the gate accepts the same-target start as repair. Blocked
+    // while a switch is in progress. Pre-start clearing of
+    // wifi_backend/backendSwitch.error is shared with handleBackendToggle
+    // (stale error cleared, fresh in-progress state replaces the lock).
+    const handleBackendRetry = async (target) => {
+        if (backendSwitch?.in_progress)
+            return;
+        await handleBackendToggle(target === "wpa_supplicant");
+    };
     // Update-flow handlers, used by the top update banner and the Updates
     // section. Share the updating/updateError state so either surface can
     // initiate a check or apply an update.
@@ -1196,7 +1244,7 @@ function Content() {
                                             if (customDnsInput) {
                                                 handleToggle("dns", () => setDns(true, "custom", customDnsInput));
                                             }
-                                        } }) }))] })) }), SP_JSX.jsx(InfoRow, { label: "Disable IPv6", subtitle: "Use IPv4 only on this network", explanation: "Some networks have poor or misconfigured IPv6 support, which can cause slow DNS resolution, connection timeouts, or routing issues. Disabling IPv6 forces all traffic through IPv4. Only enable this if you're experiencing issues - most modern networks handle IPv6 fine.", ...getBadge("ipv6", status, errors.ipv6 ?? null), checked: s?.ipv6_disabled ?? false, disabled: mutationLocked || (!connected && !s?.ipv6_disabled), error: errors.ipv6, onChange: (val) => handleToggle("ipv6", () => setIpv6(val)) }), SP_JSX.jsx(InfoRow, { label: "Traffic shaping (CAKE)", subtitle: "Fair queuing and bufferbloat prevention", explanation: "Replaces the default network queue with CAKE, which isolates traffic flows so a background download or another device can't starve your game stream. Also filters redundant TCP acknowledgments and prioritizes latency-sensitive packets. Does not limit your bandwidth. Resets on reboot and is reapplied automatically if auto-fix on wake is enabled.", ...getBadge("cake", status, errors.cake ?? null), checked: s?.cake_enabled ?? false, disabled: mutationLocked || (!connected && !s?.cake_enabled), error: errors.cake, onChange: (val) => handleToggle("cake", () => setCake(val)) }), status?.live?.backend_tool_available && (SP_JSX.jsx(BackendToggleRow, { status: status, backendSwitch: backendSwitch, error: errors.wifi_backend ?? backendSwitch?.error, isBusy: mutationLocked, onToggle: handleBackendToggle }))] }), SP_JSX.jsxs(DFL.PanelSection, { title: "Live status", children: [connected && status?.live?.ip_address && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { fontSize: theme.fontSize.tiny, color: theme.text.tertiary }, children: ["IP: ", status.live.ip_address] }) })), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(StatsGrid, { live: status?.live ?? {}, connected: connected }) })] }), SP_JSX.jsx(ActionsSection, { connected: connected, isBusy: mutationLocked, onForceReapply: handleForceReapply, onReset: handleResetSettings }), SP_JSX.jsx(UpdatesSection, { channel: s?.update_channel ?? "stable", updating: updating, checkingUpdate: checkingUpdate, updateInfo: updateInfo, updateError: updateError, onChannelChange: handleChannelChange, onApply: handleApplyUpdate, onCheck: handleCheckForUpdate }), SP_JSX.jsx(PanelFooter, { version: status?.version ?? "?" })] }));
+                                        } }) }))] })) }), SP_JSX.jsx(InfoRow, { label: "Disable IPv6", subtitle: "Use IPv4 only on this network", explanation: "Some networks have poor or misconfigured IPv6 support, which can cause slow DNS resolution, connection timeouts, or routing issues. Disabling IPv6 forces all traffic through IPv4. Only enable this if you're experiencing issues - most modern networks handle IPv6 fine.", ...getBadge("ipv6", status, errors.ipv6 ?? null), checked: s?.ipv6_disabled ?? false, disabled: mutationLocked || (!connected && !s?.ipv6_disabled), error: errors.ipv6, onChange: (val) => handleToggle("ipv6", () => setIpv6(val)) }), SP_JSX.jsx(InfoRow, { label: "Traffic shaping (CAKE)", subtitle: "Fair queuing and bufferbloat prevention", explanation: "Replaces the default network queue with CAKE, which isolates traffic flows so a background download or another device can't starve your game stream. Also filters redundant TCP acknowledgments and prioritizes latency-sensitive packets. Does not limit your bandwidth. Resets on reboot and is reapplied automatically if auto-fix on wake is enabled.", ...getBadge("cake", status, errors.cake ?? null), checked: s?.cake_enabled ?? false, disabled: mutationLocked || (!connected && !s?.cake_enabled), error: errors.cake, onChange: (val) => handleToggle("cake", () => setCake(val)) }), status?.live?.backend_tool_available && (SP_JSX.jsx(BackendToggleRow, { status: status, backendSwitch: backendSwitch, error: errors.wifi_backend ?? backendSwitch?.error, isBusy: mutationLocked, onToggle: handleBackendToggle, onRetry: handleBackendRetry }))] }), SP_JSX.jsxs(DFL.PanelSection, { title: "Live status", children: [connected && status?.live?.ip_address && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { fontSize: theme.fontSize.tiny, color: theme.text.tertiary }, children: ["IP: ", status.live.ip_address] }) })), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(StatsGrid, { live: status?.live ?? {}, connected: connected }) })] }), SP_JSX.jsx(ActionsSection, { connected: connected, isBusy: mutationLocked, onForceReapply: handleForceReapply, onReset: handleResetSettings }), SP_JSX.jsx(UpdatesSection, { channel: s?.update_channel ?? "stable", updating: updating, checkingUpdate: checkingUpdate, updateInfo: updateInfo, updateError: updateError, onChannelChange: handleChannelChange, onApply: handleApplyUpdate, onCheck: handleCheckForUpdate }), SP_JSX.jsx(PanelFooter, { version: status?.version ?? "?" })] }));
 }
 var index = definePlugin(() => {
     let gameLifetimeUnsub = null;

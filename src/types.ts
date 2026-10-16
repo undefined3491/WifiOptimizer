@@ -26,6 +26,11 @@ export interface PluginSettings {
   last_applied: number;
 }
 
+export interface BackendServiceState {
+  active: string;
+  enabled: string;
+}
+
 export interface LiveStatus {
   power_save_off?: boolean;
   signal_dbm?: string;
@@ -44,6 +49,12 @@ export interface LiveStatus {
   last_enforced?: number;
   wifi_backend?: string;
   backend_tool_available?: boolean;
+  // ST0-009 D6: configured (desired) vs services-ground-truth (effective)
+  // backend. "unknown" on the wire when unreadable. backend_services maps
+  // each backend to its {active, enabled} systemctl states.
+  backend_desired?: string;
+  backend_effective?: string;
+  backend_services?: Record<string, BackendServiceState>;
 }
 
 export interface PluginStatus {
@@ -117,6 +128,13 @@ export interface BackendSwitchResult {
   reconnect_timed_out?: boolean;
   message?: string;
   detail?: string;
+  // ST0-009 D5: same-target retry context (null when not a repair),
+  // whether a failed repair rolled back to the previous backend, and
+  // additive step codes (backend_stop/disable/enable/start_failed,
+  // nm_restart_failed, effective_mismatch).
+  repair_of?: string | null;
+  rolled_back?: boolean;
+  errors?: string[];
 }
 
 export interface BackendSwitchStatus {
@@ -137,6 +155,9 @@ export interface BackendSwitchStartResult {
   target?: string;
   from?: string | null;
   backend?: string;
+  // ST0-009 D2: true when the same-target start was accepted as repair of
+  // a diverged backend (rather than a fresh switch).
+  repair?: boolean;
 }
 
 export interface UpdateCheckResult {
@@ -168,6 +189,12 @@ export const ERROR_MESSAGES: Record<string, string> = {
   pcie_failed: "Couldn't configure PCIe power management. Try again.",
   nm_conf_failed: "Couldn't write NetworkManager configuration. Try again.",
   timeout: "Command timed out. The system may be busy. Try again.",
+  backend_stop_failed: "Couldn't stop the current WiFi backend. Try again.",
+  backend_disable_failed: "Couldn't disable the current WiFi backend. Try again.",
+  backend_enable_failed: "Couldn't enable the new WiFi backend. Try again.",
+  backend_start_failed: "The new WiFi backend failed to start. Try again, or reboot if it keeps failing.",
+  nm_restart_failed: "Couldn't restart NetworkManager after the switch. Try again.",
+  effective_mismatch: "The backend switch didn't take effect. Try again, or reboot if it keeps failing.",
   write_failed: "Couldn't install auto-fix script. The filesystem may be locked.",
   parse_error: "Settings were reset to defaults.",
   unexpected: "Something went wrong. Check the Decky log for details.",

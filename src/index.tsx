@@ -619,6 +619,16 @@ function Content() {
     }
   };
 
+  // Divergence retry (ST0-009 D7): re-run the switch toward the configured
+  // backend; the gate accepts the same-target start as repair. Blocked
+  // while a switch is in progress. Pre-start clearing of
+  // wifi_backend/backendSwitch.error is shared with handleBackendToggle
+  // (stale error cleared, fresh in-progress state replaces the lock).
+  const handleBackendRetry = async (target: "iwd" | "wpa_supplicant") => {
+    if (backendSwitch?.in_progress) return;
+    await handleBackendToggle(target === "wpa_supplicant");
+  };
+
   // Update-flow handlers, used by the top update banner and the Updates
   // section. Share the updating/updateError state so either surface can
   // initiate a check or apply an update.
@@ -1046,6 +1056,7 @@ function Content() {
             error={errors.wifi_backend ?? backendSwitch?.error}
             isBusy={mutationLocked}
             onToggle={handleBackendToggle}
+            onRetry={handleBackendRetry}
           />
         )}
       </PanelSection>
