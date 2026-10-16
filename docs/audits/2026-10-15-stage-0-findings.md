@@ -23,7 +23,23 @@ The baseline report recorded **14 Important and 9 Minor findings**, with **no Cr
   review + scoped re-review clean. See the [design](../superpowers/specs/2026-10-16-st0-005-006-profile-ownership-design.md)
   and [plan](../superpowers/plans/2026-10-16-st0-005-006-profile-ownership.md).
   Corrected-candidate device validation remains pending.
-- The other **11 Important and 9 Minor findings remain open**. Stage 0 and first Stable remain gated on their resolution/disposition and candidate-specific device evidence.
+- **ST0-004/016: corrected in source, isolated regression verified (this branch).**
+  First mutation of each domain captures the prior value into
+  `SETTINGS_DIR/system_snapshot.json` (separate file, atomic, slot-once, never
+  in `settings.json`); disablers restore only owned domains with logged
+  assumed-default fallback; qdisc restores via del-vs-replace with accepted
+  fidelity limits; transfer-clear consults the snapshot. `reset_settings()` is a
+  full reconciliation to saved defaults (live `iw` off + NM conf written,
+  dispatcher installed, owned profiles cleared before wipe with single
+  conditional reconnect, timestamped save, backend out of scope); `_uninstall`
+  restores the same plus dispatcher/files/snapshot removal, without service
+  restoration. Pre-existing `priority 100`s and pre-plugin baselines untouched
+  and disclosed. Twelve isolated tests (red→green) in `tests/test_restoration.py`;
+  full suite 71 tests OK (3 Windows inventory skips, Git Bash on PATH).
+  Independent review + scoped re-review clean. See the [design](../superpowers/specs/2026-10-16-st0-004-016-restoration-design.md)
+  and [plan](../superpowers/plans/2026-10-16-st0-004-016-restoration.md).
+  Corrected-candidate device validation remains pending.
+- The other **9 Important and 9 Minor findings remain open**. Stage 0 and first Stable remain gated on their resolution/disposition and candidate-specific device evidence.
 
 ## Coverage and evidence
 
