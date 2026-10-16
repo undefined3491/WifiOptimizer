@@ -89,7 +89,7 @@ class ErrorBoundary extends Component<
         <Banner variant="error">
           WiFi Optimizer TMS hit an unexpected error. Close and reopen the panel to
           recover. If it keeps happening, please report at
-          github.com/undefined3491/WifiOptimizer.
+          github.com/undefined3491/wifi-optimizer-tms.
         </Banner>
       );
     }

@@ -25,11 +25,12 @@ Decky plugin (Steam Deck / handhelds): React TS frontend + Python backend (runs 
 
 - Public plugin/manifest/frontend name: `WiFi Optimizer TMS`; package name: `wifi-optimizer-tms`, selected by the owner. Follow [the staged branding record](docs/branding.md); do not infer a completed GitHub rename or device migration from source changes.
 - Keep the existing technical directory key `WiFi Optimizer` in the installer and VS Code deployment settings; Decky settings/data/log paths derive from that directory. Keep `99-wifi-optimizer*`, temporary paths and logger identifiers compatible. Display names and the source-map URI use the TMS name. Do not move/delete settings, reset or uninstall to apply branding.
-- The live repository, installer/updater URLs, archive roots and release repository guard remain `undefined3491/WifiOptimizer` until the separate coordinated repository cutover. Preserve upstream credits, version continuity and all Stage 0 release gates.
+- Repository cutover uses `undefined3491/wifi-optimizer-tms` consistently in installer/updater URLs and the release repository guard; source archives use `wifi-optimizer-tms-<ref>` roots. The former `undefined3491/WifiOptimizer` name is historical; do not reuse it or add it as an updater fallback. Keep existing technical paths, upstream credits, version continuity and all Stage 0 gates.
+- Display/package branding was squash merged through PR #4 as `94cc9fec6901f38cbba68310f6567e4e2994926d`. Repository cutover and device deployment are distinct; read back GitHub identity/CI before claiming the cutover complete.
 
 ## Repository and updates
 
-- This fork's repository is `https://github.com/undefined3491/WifiOptimizer`. Installer downloads, in-app update checks/downloads, clone/install instructions, and bug-report links must point here. Keep upstream author credits and the BSD-3-Clause license intact.
+- This fork's canonical repository is `https://github.com/undefined3491/wifi-optimizer-tms`. Installer downloads, in-app update checks/downloads, clone/install instructions, and bug-report links must point here. Keep upstream author credits and the BSD-3-Clause license intact.
 - Stable updates use this fork's latest published GitHub release, tagged `v<version>` with a matching `package.json` version. Beta updates read `package.json` and download the archive from this fork's `beta` branch. Both require the corresponding release/branch to exist; never fall back to the upstream repository.
 - `install.sh` falls back to this fork's `main` branch if it cannot obtain a release tag. In-app update checks have no such fallback. Rebuild and include the tracked `dist/index.js` and `dist/index.js.map` before publishing a release or updating an installable branch.
 

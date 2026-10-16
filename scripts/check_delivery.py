@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 DECKY_PREFIX = "decky://decky/plugin/WiFi%20Optimizer%20TMS/"
-REPOSITORY = "undefined3491/WifiOptimizer"
+REPOSITORY = "undefined3491/wifi-optimizer-tms"
 SHIPPED_FILES = (
     "plugin.json", "package.json", "main.py", "decky.pyi", "dist/index.js",
     "dist/index.js.map", "defaults/dispatcher.sh.tmpl",
@@ -110,7 +110,7 @@ def get_release_history(repository: str, version: str) -> tuple[str | None, bool
 
 def verify_archive(archive: Path, version: str) -> None:
     _stable_version(version)
-    expected_root = f"WifiOptimizer-{version}"
+    expected_root = f"wifi-optimizer-tms-{version}"
     found: set[str] = set()
     seen: set[str] = set()
     try:
