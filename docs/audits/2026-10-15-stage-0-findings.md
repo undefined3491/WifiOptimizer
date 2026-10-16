@@ -56,7 +56,24 @@ The baseline report recorded **14 Important and 9 Minor findings**, with **no Cr
   scoped re-review clean. See the [design](../superpowers/specs/2026-10-16-st0-truthful-results-design.md)
   and [plan](../superpowers/plans/2026-10-16-st0-truthful-results.md).
   Corrected-candidate device validation remains pending.
-- The other **7 Important and 6 Minor findings remain open**. Stage 0 and first Stable remain gated on their resolution/disposition and candidate-specific device evidence.
+- **ST0-009: corrected in source, isolated regression verified (this branch).**
+  Desired config and effective service state are never conflated: conf-file
+  readers split from systemd readers (service fallback deleted from the desired
+  path); `already_set` only on true convergence, divergence accepted as repair,
+  outstanding `needs_reboot` rejected distinctly; every transition step checked
+  with named errors; final verification reads effective state; failed repair
+  rolls back per route (generic conf+service, steamos helper) best-effort and
+  reported; status shows `backend_desired`/`backend_effective`/`backend_services`
+  with `drift.backend`, diagnostics carry the triple; UI renders
+  agreement/divergence/unknown with retry and preserved exclusion. Ten isolated
+  tests (red→green) in `tests/test_backend_state.py`; ST0-010 reservation tests
+  extended for the converged gate; full suite 101 tests OK (3 Windows inventory
+  skips, Git Bash on PATH); `tsc --skipLibCheck` and `pnpm run build` clean with
+  rebuilt tracked `dist`. Independent review clean. See the [design](../superpowers/specs/2026-10-16-st0-backend-state-design.md)
+  and [plan](../superpowers/plans/2026-10-16-st0-backend-state.md).
+  Corrected-candidate device validation (both routes need separate environments)
+  remains pending.
+- The other **6 Important and 6 Minor findings remain open**. Stage 0 and first Stable remain gated on their resolution/disposition and candidate-specific device evidence.
 
 ## Coverage and evidence
 
