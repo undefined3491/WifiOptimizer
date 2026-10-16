@@ -73,7 +73,19 @@ The baseline report recorded **14 Important and 9 Minor findings**, with **no Cr
   and [plan](../superpowers/plans/2026-10-16-st0-backend-state.md).
   Corrected-candidate device validation (both routes need separate environments)
   remains pending.
-- The other **6 Important and 6 Minor findings remain open**. Stage 0 and first Stable remain gated on their resolution/disposition and candidate-specific device evidence.
+- **ST0-021/022/023: corrected, isolated verification (this branch).** Band row
+  promises only NM `"a"` (5 GHz) with the `"6GHz"` non-offer stated; CAKE
+  described as a local egress queue with no power over other devices, the AP,
+  or the ISP bottleneck (UI + README). Build audit went from 13 entries / 7
+  GHSAs to 1 residual (`braces` GHSA via `micromatch@4.0.8` — no patched
+  version exists, major bump would break semver/build, documented not forced)
+  via `pnpm.overrides` on `brace-expansion` within semver; lockfile diff
+  restricted to that chain; frozen install, build, `tsc --skipLibCheck`,
+  101-test suite, `check-syntax` and `verify-dist` all green. Independent review
+  clean (one environmental note: suite needs Git Bash on PATH on Windows). See
+  the [design](../superpowers/specs/2026-10-16-st0-claims-toolchain-design.md)
+  and [plan](../superpowers/plans/2026-10-16-st0-claims-toolchain.md).
+- The other **6 Important and 3 Minor findings remain open**. Stage 0 and first Stable remain gated on their resolution/disposition and candidate-specific device evidence.
 
 ## Coverage and evidence
 
