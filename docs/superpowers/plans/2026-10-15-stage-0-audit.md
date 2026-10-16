@@ -58,16 +58,20 @@
 - [x] Assign stable finding IDs and severity/disposition; include exact audited SHA, reviewed coverage, source links, checks and missing device evidence.
 - [x] Order proposed fixes by real impact and dependencies; give meaningful regression and device scenarios without implementing those fixes here.
 - [x] Validate Markdown links, `git diff --check` and absence of product/dependency/version changes; obtain a fresh documentation/report review.
-- [ ] Commit, push the `codex/` branch, create/attach the fork PR and require real `ci-required` success. Complete review before squash merge; verify main CI after merge.
-- [ ] Report static-review completion separately from Stage 0 closure and Stable readiness.
+- [x] Publish the reviewed static audit through [PR #2](https://github.com/undefined3491/wifi-optimizer-tms/pull/2), squash merged as `7e3d45f60504aa53b17155136535006b7bf1e634`; the audit report records its baseline verification separately from runtime corrections.
+- [x] Report static-review completion separately from Stage 0 closure and Stable readiness in the audit record and roadmap.
 
-## Task 5 — Owner-assisted device phase (pending)
+## Task 5 — Owner-assisted device phase (in progress)
 
-- [ ] Capture exact LCD / Stable environment and whether an older plugin is installed, then record existing configuration before installation/reset/optimization.
+Partial progress (2026-10-15): the owner reports LCD / SteamOS 3.8.28 Stable / Decky Loader 3.2.10 and prior Optimize Safe use without perceived benefit. The [inventory record](../../testing/results/2026-10-15-owner-inventory.md) lists missing evidence; environment/configuration capture and controlled tests remain incomplete.
+
+Follow-up (2026-10-16): the [device inventory](../../testing/results/2026-10-16-owner-device-inventory.md) records exact installed OS/build/kernel/driver, runtime Decky/backend evidence and existing modified plugin/configuration. This is not a pristine baseline, recovery backup or candidate validation. [ST0-010](2026-10-16-stage-0-backend-reservation.md) was corrected separately through PR #6; the remaining findings and recovery implementation are pending.
+
+- [x] Capture exact LCD / Stable environment and whether an older plugin is installed, then record existing configuration before installation/reset/optimization. File equality is recorded without asserting installation provenance.
 - [ ] Review the recovery contract and prepare candidate fixes through scoped PRs with regression tests.
 - [ ] Execute the LCD / Stable protocol on the named corrected candidate, recording actual results and limitations. Additional OS channels/hardware have separate coverage.
 - [ ] Close Stage 0 only after report findings and device criteria are satisfied; prepare a first Stable release separately.
 
 ## Execution state
 
-The owner explicitly requested starting the audit with subagents using `gpt-6.1-sol`. This permits the read-only investigations above now. Product changes, hardware-dependent conclusions and the final Stage 0 gate are subsequent work; do not mark them complete from this plan or from CI alone.
+The owner-selected `gpt-6.1-sol` static audit and initial device inventory are complete. ST0-010 was corrected separately under its scoped plan; other fixes, recovery design selection and corrected-candidate device validation remain pending. Use the [continuation entry](../../audits/2026-10-15-stage-0.md#start-the-next-session) and [correction queue](../../audits/2026-10-15-stage-0-findings.md#correction-order-and-stage-0-handoff) for the next session. Do not repeat completed audit/collection tasks or mark Stage 0 complete from this plan or CI alone.

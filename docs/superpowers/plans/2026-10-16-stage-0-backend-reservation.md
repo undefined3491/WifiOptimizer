@@ -31,7 +31,7 @@
 - [x] Reserve before yielding; track reservation and worker handoff; restore on unlaunched exits in `finally` and close the unlaunched coroutine.
 - [x] Repeat focused tests: all nine pass. Independent `gpt-6.1-sol` review reproduced that result and found no blockers; limitations above remain explicit.
 - [x] Run all 23 unit tests, Python/Bash syntax checks, pnpm 9.15.9 frozen dependency install, build, project types (`--skipLibCheck`), distribution comparison and `git diff --check`: all passed; tracked distribution unchanged.
-- [ ] Commit and push the branch; create/attach a PR to `main`, require `ci-required` success and review before squash merge. Verify main CI after merge.
+- [x] Commit and push the branch; create/attach [PR #6](https://github.com/undefined3491/wifi-optimizer-tms/pull/6), pass both push/PR `ci-required` checks at `1f5241047455884f3e5483c01a22a7d515953f6d`, complete review and squash merge as `18bf6e17470ec0a94d5cba1b6540161b480faec6`. [Main CI passed](https://github.com/undefined3491/wifi-optimizer-tms/actions/runs/38887563594) on that exact merged commit. This integration record was added while synchronizing the existing preparation draft with main.
 
 ## Device follow-up
 

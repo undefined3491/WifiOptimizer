@@ -1,6 +1,6 @@
 # Steam Deck LCD / SteamOS Stable validation
 
-Status: Procedure prepared; no device results recorded. This protocol supports [Stage 0](../audits/2026-10-15-stage-0.md) and release preparation.
+Status: Procedure prepared; [owner context](results/2026-10-15-owner-inventory.md) and [read-only inventory/runtime evidence](results/2026-10-16-owner-device-inventory.md) recorded. Installed OS/build/kernel/driver, a live Decky process reporting `v3.2.10`, correlated evidence of active `wpa_supplicant`, plugin file identity and modified configuration were observed on 2026-10-16. Stable channel remains owner-reported; controlled measurements, recoverable comparison state and candidate validation remain pending. This protocol supports [Stage 0](../audits/2026-10-15-stage-0.md) and release preparation.
 
 The [static findings](../audits/2026-10-15-stage-0-findings.md) identify unsafe restoration assumptions (ST0-004/016), wrong-profile/status mutations (005/006), unverified reconnect/switch results (007-010) and installer/update transaction failures (001-003). Capture baseline data first; review the recovery contract and corrected candidate before exercising those mutation paths. The initial inventory is observational and is not an optimization/reset test.
 
@@ -9,6 +9,8 @@ The [static findings](../audits/2026-10-15-stage-0-findings.md) identify unsafe 
 Capture the exact SteamOS version/build and Stable channel, kernel, WiFi adapter/driver, active NetworkManager backend, Decky Loader version/channel, plugin commit/package version and built bundle identity. Also record the AP/router setup, band, mesh/roaming requirements, power source, battery level, game/streaming workload and whether the plugin or older versions were already installed.
 
 "Latest Decky" and "Stable SteamOS" alone are not reproducible version identifiers. Device screenshots or a read-only diagnostic inventory can supply the values; inspect diagnostic output before sharing it and omit network credentials.
+
+Use the [standalone inventory procedure](collect-inventory.md) to observe the existing installation without plugin IPC or configuration changes. It does not replace private recovery backups or a controlled comparison.
 
 ## Establish baseline and recovery
 

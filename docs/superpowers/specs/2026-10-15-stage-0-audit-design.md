@@ -8,7 +8,7 @@ Establish what the inherited plugin changes, which failure paths can affect a pl
 
 Product-code baseline: `e957c5b49797ef456cbd8edf093eb83704aac805`, version `0.11.6`. The roadmap documentation commit `7b58d47` changes no product source or dependencies. Freeze product code during this review. Report the exact final documentation commit separately from the audited product baseline.
 
-Primary device target: owner's Steam Deck LCD / SteamOS Stable. Exact installed SteamOS, kernel, driver, active backend and Decky versions remain uncaptured. Vendor release-note versions are not installed-device evidence. Beta/Preview, OLED and other distributions receive explicitly separate coverage labels.
+Primary device target: owner's Steam Deck LCD / SteamOS Stable. The [2026-10-15 owner report](../../testing/results/2026-10-15-owner-inventory.md) supplied versions and prior Optimize Safe use without perceived benefit. The [2026-10-16 inventory and runtime follow-up](../../testing/results/2026-10-16-owner-device-inventory.md) supersede its environment gaps with observed OS/build/kernel/driver, running Decky version, backend evidence, plugin file identity and existing modified state, with explicit limitations. This is not a controlled comparison or a pristine baseline. Vendor release-note versions are not installed-device evidence. Beta/Preview, OLED and other distributions receive explicitly separate coverage labels.
 
 ## Review work packages
 
