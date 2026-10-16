@@ -11,7 +11,8 @@ from types import SimpleNamespace
 class SwitchFixture:
     def __init__(self, route="steamos"):
         self.route = route
-        self.current = "iwd"
+        self.desired = "iwd"
+        self.effective = "iwd"
         self.available = True
         self.lookup_error = False
         self.route_error = False
@@ -34,7 +35,7 @@ class SwitchFixture:
         assert {node.name for node in methods} == names
         namespace = {
             # Fail closed on imports, file access or new unstubbed effects.
-            "__builtins__": {"hasattr": hasattr, "dict": dict, "int": int, "str": str, "Exception": Exception},
+            "__builtins__": {"hasattr": hasattr, "dict": dict, "int": int, "str": str, "isinstance": isinstance, "Exception": Exception},
             "asyncio": SimpleNamespace(to_thread=self.lookup, create_task=self.launch),
             "time": SimpleNamespace(time=lambda: 1234),
             "decky": SimpleNamespace(logger=SimpleNamespace(info=self.log_info, error=lambda *_: None)),
@@ -43,13 +44,18 @@ class SwitchFixture:
         self.plugin = type("IsolatedSwitchEntry", (), {name: namespace[name] for name in names})()
         self.plugin._ensure_backend_switch_state()
         self.plugin._has_backend_tool = lambda: self.available
-        self.plugin._get_current_backend = lambda: self.current
+        self.plugin._read_desired_backend = lambda: (self.desired, None)
+        self.plugin._read_effective_backend = lambda: (self.effective, {})
         self.plugin._get_backend_method = self.get_route
         self.plugin._backend_switch_worker = lambda target: self.worker("steamos", target)
         self.plugin._generic_backend_switch_worker = lambda target: self.worker("generic", target)
 
     async def lookup(self, function):
-        assert function is self.plugin._get_current_backend
+        readers = (
+            self.plugin._read_desired_backend,
+            self.plugin._read_effective_backend,
+        )
+        assert function in readers
         self.lookup_count += 1
         self.lookup_entered.set()
         await self.lookup_release.wait()
@@ -123,7 +129,10 @@ class BackendReservationTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0)
                 self.assertEqual(sum(result["accepted"] for result in results), 1)
                 self.assertEqual(results[1]["reason"], "in_progress")
-                self.assertEqual(f.lookup_count, 1)
+                # The converged gate reads desired then effective (two
+                # single-flight lookups); the overlap is rejected before
+                # either read on the second request.
+                self.assertEqual(f.lookup_count, 2)
                 self.assertEqual(f.worker_starts, [(route, "wpa_supplicant")])
                 self.assertEqual(len(f.worker_tasks), 1)
                 self.assertIs(f.plugin._backend_switch_task, f.worker_tasks[0])
@@ -164,18 +173,56 @@ class BackendReservationTests(unittest.IsolatedAsyncioTestCase):
         f.lookup_release.set()
         self.assertTrue((await f.start())["accepted"])
 
-    async def test_already_set_preserves_previous_terminal_state_and_task(self):
+    async def test_agreement_is_already_set_desired_only_is_repair(self):
+        # True agreement (desired + effective) stays a cheap no-op that
+        # preserves the previous terminal state and task.
         f = self.fixture()
         previous = {"in_progress": False, "phase": "failed", "target": "iwd", "started_at": 8, "result": {"success": False}}
         f.plugin._backend_switch.update(previous)
         marker = object()
         f.plugin._backend_switch_task = marker
+        f.desired = "iwd"
+        f.effective = "iwd"
         f.lookup_release.set()
         result = await f.start("iwd")
         self.assertEqual(result["reason"], "already_set")
         self.assertEqual(f.plugin._backend_switch, previous)
         self.assertIs(f.plugin._backend_switch_task, marker)
         self.assertEqual(f.worker_tasks, [])
+
+    async def test_desired_only_divergence_accepts_repair(self):
+        # Desired == target but effective disagrees: accepted as repair
+        # (never already_set), with repair context for the worker.
+        f = self.fixture()
+        f.desired = "iwd"
+        f.effective = "wpa_supplicant"
+        f.lookup_release.set()
+        result = await f.start("iwd")
+        self.assertTrue(result["accepted"])
+        self.assertTrue(result["repair"])
+        self.assertEqual(f.plugin._backend_switch.get("repair_of"), "iwd")
+        self.assertEqual(f.worker_starts, [("steamos", "iwd")])
+        self.assertEqual(len(f.worker_tasks), 1)
+
+    async def test_outstanding_reboot_rejects_until_terminal_success(self):
+        f = self.fixture()
+        f.desired = "iwd"
+        f.effective = "iwd"
+        f.lookup_release.set()
+        f.plugin._backend_switch["result"] = {
+            "success": False, "target": "iwd", "needs_reboot": True}
+        previous = dict(f.plugin._backend_switch)
+        result = await f.start("iwd")
+        self.assertFalse(result["accepted"])
+        self.assertEqual(result["reason"], "needs_reboot")
+        self.assertEqual(f.plugin._backend_switch, previous)
+        self.assertEqual(f.worker_tasks, [])
+        # A later terminal success clears the outstanding reboot: the same
+        # target is a cheap no-op again, not a reboot rejection.
+        f.plugin._backend_switch["result"] = {
+            "success": True, "target": "iwd", "needs_reboot": False}
+        cleared = await f.start("iwd")
+        self.assertEqual(cleared["reason"], "already_set")
 
     async def test_worker_selection_failure_releases_reservation(self):
         f = self.fixture()

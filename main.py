@@ -315,12 +315,15 @@ class Plugin:
     def _has_backend_tool(self) -> bool:
         return self._get_backend_method() != "none"
 
-    def _get_current_backend(self) -> str | None:
-        """Return 'iwd', 'wpa_supplicant', or None if unknown.
+    def _read_desired_backend(self) -> tuple[str | None, str | None]:
+        """Configured-only backend: value plus the winning conf path.
 
-        Checks config files in priority order: our own generic conf, Bazzite's
-        iwd conf, SteamOS override, SteamOS defaults. Falls back to checking
-        which systemd service is active.
+        Reads the conf files in priority order (our own generic conf,
+        Bazzite's iwd conf, SteamOS override, SteamOS defaults) and
+        returns which file won. Never touches services. The old service
+        fallback was removed here (ST0-009 D1): configuration and reality
+        must not be conflated, so callers needing ground truth use
+        _read_effective_backend instead.
         """
         for path in (
             GENERIC_BACKEND_CONF,
@@ -338,21 +341,61 @@ class Plugin:
                             _, _, val = line.partition("=")
                             val = val.strip()
                             if val in ("iwd", "wpa_supplicant"):
-                                return val
+                                return (val, path)
             except FileNotFoundError:
                 continue
             except Exception:
                 continue
-        # No config found — check which service is running
-        result = self._run_cmd(["/usr/bin/systemctl", "is-active", "iwd"], timeout=3)
-        if result.get("stdout", "").strip() == "active":
-            return "iwd"
-        result = self._run_cmd(
-            ["/usr/bin/systemctl", "is-active", "wpa_supplicant"], timeout=3
-        )
-        if result.get("stdout", "").strip() == "active":
-            return "wpa_supplicant"
-        return None
+        return (None, None)
+
+    def _read_effective_backend(self) -> tuple[str | None, dict]:
+        """Effective backend from both services' is-active state.
+
+        Queries `systemctl is-active` for iwd and wpa_supplicant,
+        distinguishing active/inactive/failed/unknown (empty output means
+        unknown). The value is the target iff exactly its service is
+        active (both-active or none-active yields None). Never reads conf
+        files. The services map also carries is-enabled per service for
+        status/diagnostics. Failures degrade to unknown, never throw.
+        """
+        states = {}
+        for svc in ("iwd", "wpa_supplicant"):
+            try:
+                result = self._run_cmd(
+                    ["/usr/bin/systemctl", "is-active", svc], timeout=3
+                )
+                states[svc] = (result.get("stdout") or "").strip() or "unknown"
+            except Exception:
+                states[svc] = "unknown"
+        services = {}
+        for svc in ("iwd", "wpa_supplicant"):
+            try:
+                result = self._run_cmd(
+                    ["/usr/bin/systemctl", "is-enabled", svc], timeout=3
+                )
+                enabled = (result.get("stdout") or "").strip() or "unknown"
+            except Exception:
+                enabled = "unknown"
+            services[svc] = {"active": states[svc], "enabled": enabled}
+        iwd_active = states["iwd"] == "active"
+        wpa_active = states["wpa_supplicant"] == "active"
+        if iwd_active and not wpa_active:
+            value = "iwd"
+        elif wpa_active and not iwd_active:
+            value = "wpa_supplicant"
+        else:
+            value = None
+        return (value, services)
+
+    def _get_current_backend(self) -> str | None:
+        """Return 'iwd', 'wpa_supplicant', or None if unknown.
+
+        Configured-only (desired) value: thin wrapper over
+        _read_desired_backend. Callers needing ground truth must use
+        _read_effective_backend instead.
+        """
+        value, _source = self._read_desired_backend()
+        return value
 
     def _ensure_backend_switch_state(self):
         if not hasattr(self, "_backend_switch"):
@@ -1060,22 +1103,23 @@ class Plugin:
                     except Exception as e:
                         decky.logger.error(f"Startup power save failed: {e}")
 
-            # Sanity check: does the conf-declared backend match what's actually
-            # running? Divergence would indicate a previous switch got interrupted
-            # (plugin_loader crash, external tool, etc.). Log only; user can
-            # re-toggle to resolve.
+            # Sanity check: does the conf-declared (desired) backend match the
+            # effective (services) backend? Divergence would indicate a
+            # previous switch got interrupted (plugin_loader crash, external
+            # tool, etc.). Log only; the drift is surfaced via get_status and
+            # the user can re-toggle to resolve. No auto-repair at boot.
             if self._get_backend_method() != "none":
-                conf_backend = self._get_current_backend()
+                conf_backend, _boot_source = self._read_desired_backend()
                 if conf_backend:
-                    active = self._run_cmd(
-                        ["/usr/bin/systemctl", "is-active", conf_backend], timeout=3
+                    effective_backend, _boot_services = (
+                        self._read_effective_backend()
                     )
-                    state = (active.get("stdout") or "").strip()
-                    if state and state != "active":
+                    if effective_backend != conf_backend:
                         decky.logger.error(
-                            f"Backend inconsistency: conf says '{conf_backend}' "
-                            f"but systemd reports '{state}'. Likely an interrupted "
-                            f"backend switch - user can retry via the UI."
+                            f"Backend inconsistency: configured '{conf_backend}' "
+                            f"but effective '{effective_backend or 'unknown'}'. "
+                            f"Likely an interrupted backend switch - user can "
+                            f"retry via the UI."
                         )
 
             decky.logger.info(
@@ -1493,6 +1537,22 @@ class Plugin:
             except Exception:
                 pass
             distro = self._detect_distro()
+            # Backend desired/effective triple (ST0-009 D6, additive keys).
+            # Absent or failed reads render as "unknown", never throw.
+            try:
+                diag_desired, _diag_source = self._read_desired_backend()
+                diag_effective, diag_services = self._read_effective_backend()
+                backend_triple = {
+                    "backend_desired": diag_desired or "unknown",
+                    "backend_effective": diag_effective or "unknown",
+                    "backend_services": diag_services,
+                }
+            except Exception:
+                backend_triple = {
+                    "backend_desired": "unknown",
+                    "backend_effective": "unknown",
+                    "backend_services": {},
+                }
             return {
                 "success": True,
                 "device_info": info,
@@ -1504,6 +1564,7 @@ class Plugin:
                 "distro_id": distro["id"],
                 "distro_name": distro["name"],
                 "support_tier": self._get_support_tier(),
+                **backend_triple,
             }
         except Exception as e:
             decky.logger.error(f"get_diagnostic_info error: {e}")
@@ -1568,7 +1629,17 @@ class Plugin:
             backend_available = self._has_backend_tool()
             status["live"]["backend_tool_available"] = backend_available
             if backend_available:
-                status["live"]["wifi_backend"] = self._get_current_backend() or ""
+                # Desired (configured) and effective (services) are exposed
+                # side by side (ST0-009 D6); live.wifi_backend stays the
+                # desired value for backward compatibility.
+                desired, _status_source = self._read_desired_backend()
+                effective, services = self._read_effective_backend()
+                status["live"]["wifi_backend"] = desired or ""
+                status["live"]["backend_desired"] = desired or "unknown"
+                status["live"]["backend_effective"] = effective or "unknown"
+                status["live"]["backend_services"] = services
+                if desired != effective:
+                    status["drift"]["backend"] = True
 
             if not connected:
                 status["live"]["dispatcher_installed"] = os.path.isfile(
@@ -3897,28 +3968,66 @@ systemctl restart plugin_loader 2>/dev/null || true
                 "result": None,
             })
             reserved = True
-            current = await asyncio.to_thread(self._get_current_backend)
-            if current == backend:
+            # Outstanding reboot (in-memory only) takes precedence even over
+            # full agreement: the latest terminal result demands a reboot
+            # and no later terminal success cleared it. Rejected here, never
+            # reported as already_set. Read from the pre-reserve snapshot:
+            # the reserve update above clears result for the new attempt.
+            previous_result = previous_state.get("result")
+            if (
+                isinstance(previous_result, dict)
+                and previous_result.get("needs_reboot")
+                and not previous_result.get("success")
+            ):
+                return {
+                    "accepted": False,
+                    "reason": "needs_reboot",
+                    "message": (
+                        "A previous backend switch needs a reboot before "
+                        "switching again."
+                    ),
+                }
+            # Converged gate (ST0-009 D2): already_set is a rejected no-op
+            # only when desired AND effective agree on the target. Desired
+            # without effective agreement is divergence, accepted as repair.
+            desired, _desired_source = await asyncio.to_thread(
+                self._read_desired_backend
+            )
+            effective, _effective_services = await asyncio.to_thread(
+                self._read_effective_backend
+            )
+            if desired == backend and effective == backend:
                 return {
                     "accepted": False,
                     "reason": "already_set",
                     "message": f"Backend is already {backend}.",
-                    "backend": current,
+                    "backend": desired,
                 }
+            repair = desired == backend and effective != backend
 
             # Route to the appropriate worker based on backend method
             method = self._get_backend_method()
+            if repair:
+                # Repair context for the worker: a same-target retry heals
+                # divergence; on failure the worker rolls back to the
+                # previous backend (ST0-009 D5). Cleared below on rejection;
+                # the worker pops it once launched, so no stale flag survives.
+                self._backend_switch["repair_of"] = backend
             if method == "steamos":
                 worker = self._backend_switch_worker(backend)
             else:
                 worker = self._generic_backend_switch_worker(backend)
             self._backend_switch_task = asyncio.create_task(worker)
             launched = True
-            decky.logger.info(f"backend switch started: {current} -> {backend}")
+            decky.logger.info(
+                f"backend switch started: {desired} -> {backend} "
+                f"(repair={repair})"
+            )
             return {
                 "accepted": True,
                 "target": backend,
-                "from": current,
+                "from": desired,
+                "repair": repair,
             }
         except Exception as e:
             decky.logger.error(f"start_backend_switch error: {e}")
@@ -3932,6 +4041,8 @@ systemctl restart plugin_loader 2>/dev/null || true
                 if worker is not None:
                     worker.close()
                 self._backend_switch.update(previous_state)
+                # Transient repair context never survives a rejection.
+                self._backend_switch.pop("repair_of", None)
 
     async def get_backend_switch_status(self) -> dict:
         """Return current phase and, when terminal, the final result."""
