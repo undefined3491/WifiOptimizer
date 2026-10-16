@@ -24,7 +24,7 @@
 - Polling a foreign active profile with intent from another must not mutate it — expect report-only drift.
 - Active-B + owner-A disable must not clear or reconnect B — expect owner-UUID targeting.
 - Offline disable must use the owner, not any "last seen" UUID — expect A modified with `reconnected: False`.
-- Legacy enabled-without-owner must fail explicitly — expect `unknown_owner`, zero mutations, intent preserved.
+- Legacy enabled-without-owner enable must fail explicitly — expect `unknown_owner`, zero mutations, intent preserved; legacy disable clears intent only with `reconnected: False`.
 - Failed `nmcli` must not persist intent or clear ownership — expect retry-able `nmcli_failed`.
 
 ---
@@ -36,29 +36,30 @@
 - Modify: none
 
 **Interfaces:**
-- Consumes: AST-extracted `get_status`, `set_bssid_lock`, `set_band_preference`, `set_dns`, `set_ipv6`, `_resolve_uuid`, `_require_wifi` from `main.py`, stubbed `_run_cmd` / `_nmcli_modify` / `_get_wifi_interface` / `_get_active_connection_uuid` / settings IO (pattern: `tests/test_backend_reservation.py:31-49`, fail-closed builtins).
-- Produces: `ProfileFixture` with scripted NM/settings responses and `nmcli_calls: list[(uuid,key,value)]` log used by Tasks 2-4.
+- Consumes: AST-extracted `get_status`, `set_bssid_lock`, `set_band_preference`, `set_dns`, `set_ipv6`, `_resolve_uuid(owner_uuid, active_required_msg)`, `_require_wifi` from `main.py`.
+- Stub namespace (all scriptable, in-memory, no system): `_run_cmd` with `nmcli_calls: list[(uuid,key,value)]` log, `_nmcli_modify` stub, `_hard_reconnect` spy (`reconnects: list`), `_get_wifi_interface` / `_get_active_connection_uuid` scripted, `_load_settings` / `_save_settings` / `_save_settings_with_timestamp` over an in-memory dict, `time.sleep` no-op spy, `decky.logger` null sink, `os`/IO blocked. Pattern: `tests/test_backend_reservation.py:31-49`, fail-closed builtins.
+- Produces: `ProfileFixture` used by Tasks 2-4.
 
-- [ ] **Step 1: Write failing tests** in `tests/test_profile_ownership.py`: `polling_B_never_writes_or_modifies`, `active_B_owner_A_disable_targets_A`, `offline_disable_uses_owner_not_last`, `legacy_enabled_without_owner_is_unknown_owner`, `failed_nmcli_preserves_owner_and_intent`, `status_has_no_save_or_modify` (static grep on `get_status` source for `_save_settings` / `_nmcli_modify`), `priority_never_written`.
-- [ ] **Step 2: Run to verify they fail** Run: `python -m unittest tests.test_profile_ownership -v` Expected: FAIL (methods/behavior missing).
-- [ ] **Step 3: Add fixture only** (no production change): AST-extract + stubs + call log, tests still failing on behavior asserts but fixture imports cleanly.
-- [ ] **Step 4: Run full suite** Run: `python -m unittest discover -s tests` Expected: new tests fail, existing 43 pass (3 Windows skips).
+- [ ] **Step 1: Write failing tests** in `tests/test_profile_ownership.py`: `polling_B_never_writes_or_modifies`, `active_B_owner_A_disable_targets_A`, `offline_disable_uses_owner_not_last`, `legacy_status_reports_unknown_owners`, `legacy_enable_rejects_unknown_owner`, `legacy_disable_clears_intent_only`, `failed_nmcli_preserves_owner_and_intent`, `dns_partial_is_failure`, `relock_skipped_on_owner_mismatch`, `status_has_no_save_or_modify` (static grep on `get_status` source for `_save_settings|_nmcli_modify|_save_settings_with_timestamp|os.replace`), `priority_never_written` (grep whole `main.py` + `defaults/dispatcher.sh.tmpl` for `autoconnect-priority`; expect zero modifying hits).
+- [ ] **Step 2: Run to verify they fail with AssertionError (not ImportError/NameError)** Run: `python -m unittest tests.test_profile_ownership -v` Expected: FAIL on behavior asserts; any ImportError/NameError means the fixture namespace is incomplete — fix stubs first.
+- [ ] **Step 3: Add fixture only** (no production change): AST-extract + full stub namespace above + call log; re-run: imports clean, behavior asserts still FAIL.
+- [ ] **Step 4: Run full suite** Run: `python -m unittest discover -s tests` Expected: baseline suite green, new file red.
 - [ ] **Step 5: Commit** `git add tests/test_profile_ownership.py; git commit -m "test: isolated ST0-005/006 ownership fixtures (red)"`
 
 ### Task 2: Read-only get_status + priority removal
 
 **Files:**
-- Modify: `main.py:816-863` (drop S1/S2), `main.py:980-982` (drop S3), `main.py:1001-1004` (drop S4)
+- Modify: `main.py:852-863` (delete S1/S2), `main.py:980-982` (delete S3), `main.py:1001-1004` (delete S4). Early-return `main.py:844-848` untouched.
 - Test: `tests/test_profile_ownership.py`
 
 **Interfaces:**
 - Consumes: Task 1 fixture.
-- Produces: `get_status()` with zero `_save_settings` / `_nmcli_modify`; drift is report-only including `"owner_unknown"`.
+- Produces: `get_status()` with zero settings/NM writes; drift stays boolean reports plus additive `unknown_owners` list.
 
 - [ ] **Step 1: Verify red** Run: `python -m unittest tests.test_profile_ownership -v` Expected: FAIL on `polling_B_never_writes_or_modifies`, `status_has_no_save_or_modify`, `priority_never_written`.
-- [ ] **Step 2: Implement** delete S1/S2/S3/S4 per D1/D2; disconnected early-return unchanged; drift entries stay as reports.
+- [ ] **Step 2: Implement** delete S1/S2/S3/S4 per D1/D2 (`852-863`, `980-982`, `1001-1004` only); disconnected early-return unchanged; drift entries stay boolean reports; add additive `unknown_owners` list.
 - [ ] **Step 3: Run** `python -m unittest tests.test_profile_ownership -v` Expected: status/priority tests PASS.
-- [ ] **Step 4: Run full suite** `python -m unittest discover -s tests` Expected: no regressions (43 baseline + new).
+- [ ] **Step 4: Run full suite** `python -m unittest discover -s tests` Expected: baseline green, no regressions.
 - [ ] **Step 5: Commit** `git add main.py tests/test_profile_ownership.py; git commit -m "fix: read-only get_status, drop automatic priority 100 (ST0-006)"`
 
 ### Task 3: Owner-UUID schema + explicit target recording + resolution
@@ -72,9 +73,13 @@
 - Produces: enablers require active + set owner; disablers use owner offline; transfer overwrites owner with best-effort old-profile clear; unknown-owner contract per D6; failures per D7.
 
 - [ ] **Step 1: Verify red** Run: `python -m unittest tests.test_profile_ownership -v` Expected: FAIL on ownership/transfer/legacy/retry tests.
-- [ ] **Step 2: Implement** schema + recording + resolution + BSSID-disable owner preference + band-relock gating (`band_target == bssid_owner`, MAC verify, partial on failure) + offline `reconnected: False`.
+- [ ] **Step 2a: Implement `_resolve_uuid(owner_uuid, active_required_msg)`** per D4 with two call shapes + tests; run new tests green.
+- [ ] **Step 2b: Implement owner schema + record/clear** per D3/D5 (BSSID preference for owner, transfer with D5 clear table, no reconnect on old UUID).
+- [ ] **Step 2c: Implement per-setter enable/disable paths** (band/DNS/IPv6/BSSID) + legacy split (enable→`unknown_owner`, disable→intent-only clear) per D6.
+- [ ] **Step 2d: Implement failure contracts** (`nmcli_failed` retain-and-retry, `dns_partial`, `relock_failed` with `band_owner_uuid == bssid_lock_connection_uuid` gating + MAC verify) per D7.
+- [ ] **Step 2e: Implement offline `reconnected: False`** (no `_hard_reconnect` for foreign/offline targets).
 - [ ] **Step 3: Run** `python -m unittest tests.test_profile_ownership -v` Expected: PASS.
-- [ ] **Step 4: Run full suite + syntax** `python -m unittest discover -s tests` and `bash -n` on touched shell-adjacent paths if any; `python -m py_compile main.py`.
+- [ ] **Step 4: Run full suite + syntax** `python -m unittest discover -s tests`; preflight `bash --version`; `python -m py_compile main.py`.
 - [ ] **Step 5: Commit** `git add main.py tests/test_profile_ownership.py; git commit -m "fix: per-profile owners, owner-based disablers, legacy unknown-owner (ST0-005/006)"`
 
 ### Task 4: Docs state update (no product behavior change)
