@@ -706,6 +706,8 @@ class Plugin:
                 "file_backend_conf",
                 "file_dispatcher",
             ):
+                # file_backend_conf has no callers on purpose: backend scope
+                # is out, service states are never restored (only observed).
                 path = {
                     "file_nm_conf": NM_CONF_PATH,
                     "file_modprobe_conf": MODPROBE_CONF_PATH,
@@ -726,6 +728,8 @@ class Plugin:
                     except FileNotFoundError:
                         pass
             elif name == "backend":
+                # Diagnosis only, no callers: the captured service states
+                # inform debugging but are never restored.
                 return "backend service state is diagnosis only (never restored)"
             elif name.startswith("profile_"):
                 if not isinstance(slot, dict):
@@ -993,6 +997,14 @@ class Plugin:
         try:
             decky.logger.info("WiFi Optimizer TMS uninstalling")
             errors = []
+            # Owner UUIDs are read before wiping settings.json (mirrors reset).
+            settings = _load_settings()
+            owners = {
+                "bssid": settings.get("bssid_lock_connection_uuid") or "",
+                "band": settings.get("band_owner_uuid") or "",
+                "dns": settings.get("dns_owner_uuid") or "",
+                "ipv6": settings.get("ipv6_owner_uuid") or "",
+            }
             # Live-state restoration from the snapshot (same owned-only
             # semantics as reset). File-backed state below is removed, so
             # file slots are not restored. Service enablement is never
@@ -1054,6 +1066,18 @@ class Plugin:
                         f"{restore_err}"
                     )
                     errors.append("fallback:power_save")
+            else:
+                decky.logger.info(
+                    "snapshot restore fallback for qdisc/txqueuelen: "
+                    "no wifi interface"
+                )
+                errors.append("fallback:qdisc")
+                errors.append("fallback:txqueuelen")
+                decky.logger.info(
+                    "snapshot restore fallback for power_save: "
+                    "no wifi interface"
+                )
+                errors.append("fallback:power_save")
             try:
                 restore_err = self._restore_slot("driver_sysfs")
             except Exception as e:
@@ -1074,6 +1098,12 @@ class Plugin:
                 )
                 errors.append("fallback:pcie")
                 self._apply_pcie_aspm_fix(False)
+            # Owned-profile cleanup (same literals + single conditional
+            # reconnect as reset): settings.json + snapshot are removed
+            # below, so orphaned values would otherwise survive with no
+            # owner record to repair them.
+            active_uuid = self._get_active_connection_uuid()
+            self._clear_owned_profiles(owners, active_uuid, errors)
             self._remove_dispatcher()
             for path in [NM_CONF_PATH, MODPROBE_CONF_PATH, GENERIC_BACKEND_CONF,
                          SETTINGS_FILE, ENFORCED_FILE, SNAPSHOT_FILE]:
@@ -1276,6 +1306,40 @@ class Plugin:
                     f"transfer clear failed on {prev_uuid} {key}: {detail}"
                 )
         return warnings
+
+    def _clear_owned_profiles(
+        self, owners: dict, active_uuid: str | None, errors: list
+    ):
+        """Clear every known owner profile to literals + one conditional reconnect.
+
+        Shared by reset_settings and _uninstall (same restoration as reset):
+        settings.json (and on uninstall, the snapshot) disappear below, so
+        orphaned BSSID/band/DNS/IPv6 values would otherwise survive with no
+        owner record to repair them. Failures land in errors, never throw.
+        """
+        reconnect_needed = False
+        for uuid, clears in (
+            (owners.get("bssid"), [("802-11-wireless.bssid", "")]),
+            (owners.get("band"), [("802-11-wireless.band", "")]),
+            (
+                owners.get("dns"),
+                [("ipv4.dns", ""), ("ipv4.ignore-auto-dns", "no")],
+            ),
+            (owners.get("ipv6"), [("ipv6.method", "auto")]),
+        ):
+            if not uuid:
+                continue
+            for key, value in clears:
+                result = self._nmcli_modify(uuid, key, value)
+                if not result["success"]:
+                    errors.append(f"{key}: {result.get('stderr', '')}")
+            if active_uuid and uuid == active_uuid:
+                reconnect_needed = True
+        if reconnect_needed:
+            try:
+                self._hard_reconnect(active_uuid)
+            except Exception as e:
+                errors.append(f"reconnect_failed: {e}")
 
     # ---- Diagnostics ----
 
@@ -2860,31 +2924,10 @@ class Plugin:
 
             # (d) Per-profile cleanup before wiping settings.json: clear
             # exactly each known owner's keys, then a single conditional
-            # reconnect. Failures land in errors, never throw.
+            # reconnect (shared helper with _uninstall). Failures land in
+            # errors, never throw.
             active_uuid = self._get_active_connection_uuid()
-            reconnect_needed = False
-            for uuid, clears in (
-                (owners["bssid"], [("802-11-wireless.bssid", "")]),
-                (owners["band"], [("802-11-wireless.band", "")]),
-                (
-                    owners["dns"],
-                    [("ipv4.dns", ""), ("ipv4.ignore-auto-dns", "no")],
-                ),
-                (owners["ipv6"], [("ipv6.method", "auto")]),
-            ):
-                if not uuid:
-                    continue
-                for key, value in clears:
-                    result = self._nmcli_modify(uuid, key, value)
-                    if not result["success"]:
-                        errors.append(f"{key}: {result.get('stderr', '')}")
-                if active_uuid and uuid == active_uuid:
-                    reconnect_needed = True
-            if reconnect_needed:
-                try:
-                    self._hard_reconnect(active_uuid)
-                except Exception as e:
-                    errors.append(f"reconnect_failed: {e}")
+            self._clear_owned_profiles(owners, active_uuid, errors)
 
             try:
                 os.remove(ENFORCED_FILE)

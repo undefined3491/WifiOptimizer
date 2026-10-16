@@ -46,6 +46,7 @@ METHOD_NAMES = {
     "_resolve_uuid",
     "_require_wifi",
     "_clear_transferred_profile",
+    "_clear_owned_profiles",
     "_apply_driver_fixes",
     "_apply_pcie_aspm_fix",
     "_install_dispatcher",
@@ -947,6 +948,87 @@ class RestorationTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertNotIn(path, f.fs)
         self.assertEqual(f.reconnects, [])
+
+    async def test_uninstall_clears_owned_profiles_conditional_reconnect(self):
+        # Active profile owns keys: cleared to literals + single reconnect.
+        f = self.fixture()
+        self.require_snapshot(f)
+        f.active_uuid = UUID_A
+        f.nm_profiles[UUID_A] = {
+            "802-11-wireless.bssid": "AA:BB:CC:DD:EE:FF",
+            "802-11-wireless.band": "a",
+            "ipv6.method": "disabled",
+        }
+        f.nm_profiles[UUID_B] = {
+            "ipv4.dns": "1.1.1.1 1.0.0.1",
+            "ipv4.ignore-auto-dns": "yes",
+        }
+        f.seed_settings(
+            bssid_lock_enabled=True,
+            bssid_lock_connection_uuid=UUID_A,
+            band_preference_enabled=True,
+            band_owner_uuid=UUID_A,
+            dns_enabled=True,
+            dns_owner_uuid=UUID_B,
+            ipv6_disabled=True,
+            ipv6_owner_uuid=UUID_A,
+            driver="rtw88",
+        )
+
+        await f.plugin._uninstall()
+
+        for entry in (
+            (UUID_A, "802-11-wireless.bssid", ""),
+            (UUID_A, "802-11-wireless.band", ""),
+            (UUID_B, "ipv4.dns", ""),
+            (UUID_B, "ipv4.ignore-auto-dns", "no"),
+            (UUID_A, "ipv6.method", "auto"),
+        ):
+            self.assertIn(entry, f.nmcli_calls)
+        self.assertEqual(f.reconnects, [UUID_A])
+        for path in (f.SETTINGS_FILE, f.SNAPSHOT_FILE):
+            self.assertNotIn(path, f.fs)
+
+        # Foreign active profile: owners still cleared, no reconnect.
+        g = self.fixture()
+        self.require_snapshot(g)
+        g.active_uuid = UUID_B
+        g.nm_profiles[UUID_A] = {
+            "802-11-wireless.bssid": "AA:BB:CC:DD:EE:FF",
+            "802-11-wireless.band": "a",
+            "ipv6.method": "disabled",
+        }
+        g.seed_settings(
+            bssid_lock_enabled=True,
+            bssid_lock_connection_uuid=UUID_A,
+            band_preference_enabled=True,
+            band_owner_uuid=UUID_A,
+            dns_enabled=False,
+            ipv6_disabled=True,
+            ipv6_owner_uuid=UUID_A,
+            driver="rtw88",
+        )
+
+        await g.plugin._uninstall()
+
+        for entry in (
+            (UUID_A, "802-11-wireless.bssid", ""),
+            (UUID_A, "802-11-wireless.band", ""),
+            (UUID_A, "ipv6.method", "auto"),
+        ):
+            self.assertIn(entry, g.nmcli_calls)
+        self.assertEqual(g.reconnects, [])
+
+        # Offline live restore is logged as fallback, never silent.
+        h = self.fixture()
+        self.require_snapshot(h)
+        h.iface = None
+        h.active_uuid = None
+        h.seed_settings(driver="rtw88")
+
+        await h.plugin._uninstall()
+
+        self.assertTrue(h.logged_fallback())
 
     def test_priority_never_written_restoration(self):
         hits = []
