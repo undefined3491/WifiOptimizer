@@ -624,6 +624,18 @@ class RestorationFixture:
 
     def _stub_hard_reconnect(self, uuid=None):
         self.reconnects.append(uuid)
+        # Mirrors the D1 success shape: reconnect attempted and verified.
+        stage = {"ok": True, "stderr": ""}
+        return {
+            "stages": {
+                "radio_off": dict(stage),
+                "radio_on": dict(stage),
+                "activation": dict(stage) if uuid else None,
+            },
+            "verified": True,
+            "active_uuid_after": uuid,
+            "radio_off_without_on": False,
+        }
 
     def method_source(self, name):
         tree = ast.parse(

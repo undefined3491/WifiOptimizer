@@ -764,12 +764,80 @@ class Plugin:
             }
         return iface, uuid, None
 
-    def _hard_reconnect(self, uuid: str | None = None):
-        """Reconnect by cycling WiFi radio to fully reset NM connection state."""
-        self._run_cmd(["/usr/bin/nmcli", "radio", "wifi", "off"])
-        self._run_cmd(["/usr/bin/nmcli", "radio", "wifi", "on"])
+    def _hard_reconnect(self, uuid: str | None = None) -> dict:
+        """Reconnect by cycling WiFi radio to fully reset NM connection state.
+
+        Never throws (_run_cmd never throws): every stage is recorded and
+        the result reports what actually happened. `verified` is True only
+        when the radio came back on, the requested activation (if any)
+        succeeded, and the live active UUID equals the requested uuid after
+        verification polling: up to 2 checks with 2s command timeouts each
+        (status quantum) and one time.sleep(1) between tries (sync def,
+        same mechanism as the existing band-relock pause), total budget
+        ~5s. A timeout or mismatch yields verified False, never an error.
+        A radio-on failure after a successful radio-off sets
+        radio_off_without_on since the radio may be dead. No recovery is
+        attempted: report, don't mask.
+        """
+        off = self._run_cmd(["/usr/bin/nmcli", "radio", "wifi", "off"])
+        on = self._run_cmd(["/usr/bin/nmcli", "radio", "wifi", "on"])
+        activation = None
         if uuid:
-            self._run_cmd(["/usr/bin/nmcli", "con", "up", "uuid", uuid], timeout=10)
+            act = self._run_cmd(
+                ["/usr/bin/nmcli", "con", "up", "uuid", uuid], timeout=10
+            )
+            activation = {
+                "ok": bool(act.get("success")),
+                "stderr": act.get("stderr", ""),
+            }
+        stages = {
+            "radio_off": {
+                "ok": bool(off.get("success")),
+                "stderr": off.get("stderr", ""),
+            },
+            "radio_on": {
+                "ok": bool(on.get("success")),
+                "stderr": on.get("stderr", ""),
+            },
+            "activation": activation,
+        }
+        radio_off_without_on = bool(
+            stages["radio_off"]["ok"] and not stages["radio_on"]["ok"]
+        )
+        verified = False
+        active_uuid_after = None
+        if stages["radio_on"]["ok"] and (activation is None or activation["ok"]):
+            for attempt in range(2):
+                if attempt:
+                    time.sleep(1)
+                poll = self._run_cmd(
+                    [
+                        "/usr/bin/nmcli",
+                        "-t",
+                        "-f",
+                        "UUID,TYPE",
+                        "con",
+                        "show",
+                        "--active",
+                    ],
+                    timeout=2,
+                )
+                active_uuid_after = None
+                if poll.get("success"):
+                    for line in poll.get("stdout", "").split("\n"):
+                        parts = line.split(":")
+                        if len(parts) >= 2 and parts[1] == "802-11-wireless":
+                            active_uuid_after = parts[0]
+                            break
+                if uuid is None or active_uuid_after == uuid:
+                    verified = True
+                    break
+        return {
+            "stages": stages,
+            "verified": verified,
+            "active_uuid_after": active_uuid_after,
+            "radio_off_without_on": radio_off_without_on,
+        }
 
     def _apply_driver_fixes(self, enable: bool):
         """Apply or revert driver-specific power save fixes from DRIVER_PROFILES.
@@ -1874,11 +1942,19 @@ class Plugin:
                 settings["bssid_lock_value"] = bssid
                 settings["bssid_lock_connection_uuid"] = uuid
                 _save_settings_with_timestamp(settings)
-                self._hard_reconnect(uuid)
+                rc = self._hard_reconnect(uuid) or {}
+                reconnect = {
+                    "attempted": True,
+                    "stages": rc.get("stages") or {},
+                    "verified": bool(rc.get("verified")),
+                    "active_uuid_after": rc.get("active_uuid_after"),
+                    "radio_off_without_on": bool(rc.get("radio_off_without_on")),
+                }
                 return {
                     "success": True,
                     "bssid_locked": True,
-                    "reconnected": True,
+                    "reconnected": bool(rc.get("verified")),
+                    "reconnect": reconnect,
                     "transfer_warnings": transfer_warnings,
                     "errors": errors,
                 }
@@ -1934,14 +2010,32 @@ class Plugin:
                 settings["bssid_lock_connection_uuid"] = ""
                 _save_settings_with_timestamp(settings)
                 active_uuid = self._get_active_connection_uuid()
-                reconnected = bool(active_uuid and active_uuid == uuid)
-                if reconnected:
-                    self._hard_reconnect(uuid)
+                if active_uuid and active_uuid == uuid:
+                    rc = self._hard_reconnect(uuid) or {}
+                    reconnect = {
+                        "attempted": True,
+                        "stages": rc.get("stages") or {},
+                        "verified": bool(rc.get("verified")),
+                        "active_uuid_after": rc.get("active_uuid_after"),
+                        "radio_off_without_on": bool(
+                            rc.get("radio_off_without_on")
+                        ),
+                    }
+                    reconnected = bool(rc.get("verified"))
+                else:
+                    reconnected = False
+                    reconnect = {
+                        "attempted": False,
+                        "skipped": "offline"
+                        if not active_uuid
+                        else "foreign_owner",
+                    }
 
             return {
                 "success": True,
                 "bssid_locked": enabled,
                 "reconnected": reconnected,
+                "reconnect": reconnect,
                 "errors": errors,
             }
         except Exception as e:
@@ -2004,11 +2098,19 @@ class Plugin:
 
                 # Re-lock the BSSID only when this same profile owns both the
                 # band preference and the BSSID lock; otherwise the lock on
-                # the other profile is left untouched.
+                # the other profile is left untouched. The pre-clear is
+                # checked and reported (never discarded).
                 bssid_owner = settings.get("bssid_lock_connection_uuid") or ""
-                relock = bool(bssid_owner and bssid_owner == uuid)
-                if relock:
-                    self._nmcli_modify(uuid, "802-11-wireless.bssid", "")
+                relock_attempted = bool(bssid_owner and bssid_owner == uuid)
+                if relock_attempted:
+                    preclear = self._nmcli_modify(
+                        uuid, "802-11-wireless.bssid", ""
+                    )
+                    if not preclear.get("success"):
+                        errors.append(
+                            "bssid_preclear_failed: "
+                            f"{preclear.get('stderr', '')}"
+                        )
 
                 settings = _load_settings()
                 settings["band_preference_enabled"] = True
@@ -2016,10 +2118,19 @@ class Plugin:
                 settings["band_owner_uuid"] = uuid
                 _save_settings_with_timestamp(settings)
 
-                self._hard_reconnect(uuid)
+                rc = self._hard_reconnect(uuid) or {}
+                reconnect = {
+                    "attempted": True,
+                    "stages": rc.get("stages") or {},
+                    "verified": bool(rc.get("verified")),
+                    "active_uuid_after": rc.get("active_uuid_after"),
+                    "radio_off_without_on": bool(rc.get("radio_off_without_on")),
+                }
+                reconnected = bool(rc.get("verified"))
 
                 # Re-lock BSSID to whatever AP NM picked on the new band
-                if relock:
+                relock_detail = {"attempted": False, "ok": True}
+                if relock_attempted:
                     time.sleep(3)
                     iface = self._get_wifi_interface()
                     new_bssid = ""
@@ -2037,6 +2148,9 @@ class Plugin:
                             "error": "relock_failed",
                             "message": "Changed band but couldn't determine the new BSSID",
                             "band": value,
+                            "reconnected": reconnected,
+                            "reconnect": reconnect,
+                            "relock": {"attempted": True, "ok": False},
                         }
                     relock_result = self._nmcli_modify(
                         uuid, "802-11-wireless.bssid", new_bssid
@@ -2048,16 +2162,30 @@ class Plugin:
                             "message": "Changed band but couldn't re-lock BSSID",
                             "detail": relock_result["stderr"],
                             "band": value,
+                            "reconnected": reconnected,
+                            "reconnect": reconnect,
+                            "relock": {
+                                "attempted": True,
+                                "ok": False,
+                                "detail": relock_result.get("stderr", ""),
+                            },
                         }
                     settings = _load_settings()
                     settings["bssid_lock_value"] = new_bssid
                     _save_settings(settings)
                     decky.logger.info(f"Re-locked BSSID to {new_bssid} after band change")
+                    relock_detail = {
+                        "attempted": True,
+                        "ok": True,
+                        "bssid": new_bssid,
+                    }
 
                 return {
                     "success": True,
                     "band": value,
-                    "reconnected": True,
+                    "reconnected": reconnected,
+                    "reconnect": reconnect,
+                    "relock": relock_detail,
                     "transfer_warnings": transfer_warnings,
                     "errors": errors,
                 }
@@ -2108,13 +2236,27 @@ class Plugin:
             _save_settings_with_timestamp(settings)
 
             active_uuid = self._get_active_connection_uuid()
-            reconnected = bool(active_uuid and active_uuid == uuid)
-            if reconnected:
-                self._hard_reconnect(uuid)
+            if active_uuid and active_uuid == uuid:
+                rc = self._hard_reconnect(uuid) or {}
+                reconnect = {
+                    "attempted": True,
+                    "stages": rc.get("stages") or {},
+                    "verified": bool(rc.get("verified")),
+                    "active_uuid_after": rc.get("active_uuid_after"),
+                    "radio_off_without_on": bool(rc.get("radio_off_without_on")),
+                }
+                reconnected = bool(rc.get("verified"))
+            else:
+                reconnected = False
+                reconnect = {
+                    "attempted": False,
+                    "skipped": "offline" if not active_uuid else "foreign_owner",
+                }
             return {
                 "success": True,
                 "band": "",
                 "reconnected": reconnected,
+                "reconnect": reconnect,
                 "errors": errors,
             }
         except Exception as e:
@@ -2203,11 +2345,19 @@ class Plugin:
                 settings["dns_owner_uuid"] = uuid
                 _save_settings_with_timestamp(settings)
 
-                self._hard_reconnect(uuid)
+                rc = self._hard_reconnect(uuid) or {}
+                reconnect = {
+                    "attempted": True,
+                    "stages": rc.get("stages") or {},
+                    "verified": bool(rc.get("verified")),
+                    "active_uuid_after": rc.get("active_uuid_after"),
+                    "radio_off_without_on": bool(rc.get("radio_off_without_on")),
+                }
                 return {
                     "success": True,
                     "dns_set": True,
-                    "reconnected": True,
+                    "reconnected": bool(rc.get("verified")),
+                    "reconnect": reconnect,
                     "transfer_warnings": transfer_warnings,
                     "errors": errors,
                 }
@@ -2263,13 +2413,27 @@ class Plugin:
             _save_settings_with_timestamp(settings)
 
             active_uuid = self._get_active_connection_uuid()
-            reconnected = bool(active_uuid and active_uuid == uuid)
-            if reconnected:
-                self._hard_reconnect(uuid)
+            if active_uuid and active_uuid == uuid:
+                rc = self._hard_reconnect(uuid) or {}
+                reconnect = {
+                    "attempted": True,
+                    "stages": rc.get("stages") or {},
+                    "verified": bool(rc.get("verified")),
+                    "active_uuid_after": rc.get("active_uuid_after"),
+                    "radio_off_without_on": bool(rc.get("radio_off_without_on")),
+                }
+                reconnected = bool(rc.get("verified"))
+            else:
+                reconnected = False
+                reconnect = {
+                    "attempted": False,
+                    "skipped": "offline" if not active_uuid else "foreign_owner",
+                }
             return {
                 "success": True,
                 "dns_set": False,
                 "reconnected": reconnected,
+                "reconnect": reconnect,
                 "errors": errors,
             }
         except Exception as e:
@@ -2327,11 +2491,19 @@ class Plugin:
                 settings["ipv6_owner_uuid"] = uuid
                 _save_settings_with_timestamp(settings)
 
-                self._hard_reconnect(uuid)
+                rc = self._hard_reconnect(uuid) or {}
+                reconnect = {
+                    "attempted": True,
+                    "stages": rc.get("stages") or {},
+                    "verified": bool(rc.get("verified")),
+                    "active_uuid_after": rc.get("active_uuid_after"),
+                    "radio_off_without_on": bool(rc.get("radio_off_without_on")),
+                }
                 return {
                     "success": True,
                     "ipv6_disabled": True,
-                    "reconnected": True,
+                    "reconnected": bool(rc.get("verified")),
+                    "reconnect": reconnect,
                     "transfer_warnings": transfer_warnings,
                     "errors": errors,
                 }
@@ -2382,13 +2554,27 @@ class Plugin:
             _save_settings_with_timestamp(settings)
 
             active_uuid = self._get_active_connection_uuid()
-            reconnected = bool(active_uuid and active_uuid == uuid)
-            if reconnected:
-                self._hard_reconnect(uuid)
+            if active_uuid and active_uuid == uuid:
+                rc = self._hard_reconnect(uuid) or {}
+                reconnect = {
+                    "attempted": True,
+                    "stages": rc.get("stages") or {},
+                    "verified": bool(rc.get("verified")),
+                    "active_uuid_after": rc.get("active_uuid_after"),
+                    "radio_off_without_on": bool(rc.get("radio_off_without_on")),
+                }
+                reconnected = bool(rc.get("verified"))
+            else:
+                reconnected = False
+                reconnect = {
+                    "attempted": False,
+                    "skipped": "offline" if not active_uuid else "foreign_owner",
+                }
             return {
                 "success": True,
                 "ipv6_disabled": False,
                 "reconnected": reconnected,
+                "reconnect": reconnect,
                 "errors": errors,
             }
         except Exception as e:
@@ -2634,12 +2820,21 @@ class Plugin:
             settings["last_applied"] = int(time.time())
             _save_settings(settings)
 
+            # Top-level success is False when any child failed; reconnected
+            # is computed from verified children (any verified), and
+            # did_reconnect only when a child actually attempted.
+            child_reconnects = [r.get("reconnect") or {} for r in results.values()]
             return {
-                "success": True,
+                "success": all(r.get("success") for r in results.values()),
                 "total": total,
                 "applied": applied,
                 "results": results,
-                "reconnected": True,
+                "reconnected": any(
+                    rc.get("verified", False) for rc in child_reconnects
+                ),
+                "did_reconnect": any(
+                    rc.get("attempted", False) for rc in child_reconnects
+                ),
             }
         except Exception as e:
             decky.logger.error(f"optimize_safe error: {e}")
@@ -2686,7 +2881,6 @@ class Plugin:
             results = {}
             applied = 0
             total = 0
-            did_reconnect = False
 
             # Non-reconnecting first
             if settings.get("auto_fix_on_wake"):
@@ -2717,7 +2911,6 @@ class Plugin:
                 results["bssid_lock"] = r
                 if r.get("success"):
                     applied += 1
-                did_reconnect = True
 
             if settings.get("band_preference_enabled"):
                 total += 1
@@ -2727,7 +2920,6 @@ class Plugin:
                 results["band_preference"] = r
                 if r.get("success"):
                     applied += 1
-                did_reconnect = True
 
             if settings.get("dns_enabled"):
                 total += 1
@@ -2739,7 +2931,6 @@ class Plugin:
                 results["dns"] = r
                 if r.get("success"):
                     applied += 1
-                did_reconnect = True
 
             if settings.get("ipv6_disabled"):
                 total += 1
@@ -2747,7 +2938,6 @@ class Plugin:
                 results["ipv6"] = r
                 if r.get("success"):
                     applied += 1
-                did_reconnect = True
 
             # Power save last (sticks after any reconnects, dispatcher also reapplies)
             if settings.get("power_save_disabled"):
@@ -2766,15 +2956,22 @@ class Plugin:
                     "message": "No optimizations enabled",
                 }
 
-            result = {
-                "success": True,
+            # Top-level success is False when any child failed; reconnected
+            # is computed from verified children (any verified), and
+            # did_reconnect only when a child actually attempted.
+            child_reconnects = [r.get("reconnect") or {} for r in results.values()]
+            return {
+                "success": all(r.get("success") for r in results.values()),
                 "total": total,
                 "applied": applied,
                 "results": results,
+                "reconnected": any(
+                    rc.get("verified", False) for rc in child_reconnects
+                ),
+                "did_reconnect": any(
+                    rc.get("attempted", False) for rc in child_reconnects
+                ),
             }
-            if did_reconnect:
-                result["reconnected"] = True
-            return result
         except Exception as e:
             decky.logger.error(f"reapply_all error: {e}")
             return self._unexpected_response(e)
