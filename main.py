@@ -833,7 +833,23 @@ class Plugin:
                 "settings": settings,
                 "live": {},
                 "drift": {},
+                "unknown_owners": [],
             }
+
+            # Per-profile ownership is explicit: an enabled setting without a
+            # known owner UUID is reported (never guessed or repaired here).
+            if settings.get("bssid_lock_enabled") and not settings.get(
+                "bssid_lock_connection_uuid"
+            ):
+                status["unknown_owners"].append("bssid_lock")
+            if settings.get("band_preference_enabled") and not settings.get(
+                "band_owner_uuid"
+            ):
+                status["unknown_owners"].append("band_preference")
+            if settings.get("dns_enabled") and not settings.get("dns_owner_uuid"):
+                status["unknown_owners"].append("dns")
+            if settings.get("ipv6_disabled") and not settings.get("ipv6_owner_uuid"):
+                status["unknown_owners"].append("ipv6")
 
             # Backend info is system-wide; populate regardless of connection state
             backend_available = self._has_backend_tool()
@@ -846,21 +862,6 @@ class Plugin:
                     DISPATCHER_PATH
                 )
                 return status
-
-            # Remember UUID and ensure high autoconnect-priority so NM
-            # prefers this profile over duplicates on boot (fixes 2.4GHz issue)
-            if uuid and uuid != settings.get("last_connection_uuid"):
-                settings["last_connection_uuid"] = uuid
-                settings["priority_set"] = False
-                _save_settings(settings)
-
-            if uuid and not settings.get("priority_set"):
-                # Bump priority to favor this profile over duplicates on boot.
-                self._nmcli_modify(
-                    uuid, "connection.autoconnect-priority", "100", timeout=T
-                )
-                settings["priority_set"] = True
-                _save_settings(settings)
 
             # Power save
             ps_result = self._run_cmd(
@@ -979,7 +980,6 @@ class Plugin:
             status["live"]["ipv6_method"] = live_ipv6
             if settings.get("ipv6_disabled") and live_ipv6 != "disabled":
                 status["drift"]["ipv6"] = True
-                self._nmcli_modify(uuid, "ipv6.method", "disabled", timeout=T)
 
             # Band preference
             band_result = self._run_cmd(
@@ -1001,7 +1001,6 @@ class Plugin:
             expected_band = settings.get("band_preference", "a")
             if settings.get("band_preference_enabled") and live_band != expected_band:
                 status["drift"]["band_preference"] = True
-                self._nmcli_modify(uuid, "802-11-wireless.band", expected_band, timeout=T)
 
             # Buffer tuning
             sysctl_result = self._run_cmd(
