@@ -22,6 +22,7 @@ METHOD_NAMES = {
     "set_dns",
     "set_ipv6",
     "_resolve_uuid",
+    "_clear_transferred_profile",
     "_require_wifi",
     "_unexpected_response",
     "_get_support_tier",

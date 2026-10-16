@@ -152,6 +152,9 @@ DEFAULT_SETTINGS = {
     "bssid_lock_enabled": False,
     "bssid_lock_value": "",
     "bssid_lock_connection_uuid": "",
+    "band_owner_uuid": "",
+    "dns_owner_uuid": "",
+    "ipv6_owner_uuid": "",
     "band_preference": "a",
     "band_preference_enabled": False,
     "dns_provider": "cloudflare",
@@ -368,11 +371,6 @@ class Plugin:
                 "message": "No active WiFi connection",
             }
         return iface, uuid, None
-
-    def _get_saved_connection_uuid(self) -> str | None:
-        """Get connection UUID from settings (for modifying saved profiles when disconnected)."""
-        settings = _load_settings()
-        return settings.get("last_connection_uuid") or settings.get("bssid_lock_connection_uuid") or None
 
     def _hard_reconnect(self, uuid: str | None = None):
         """Reconnect by cycling WiFi radio to fully reset NM connection state."""
@@ -736,32 +734,57 @@ class Plugin:
             timeout=timeout,
         )
 
-    def _resolve_uuid(self, active_required_msg: str | None = None) -> tuple:
+    def _resolve_uuid(
+        self, owner_uuid: str | None = None, active_required_msg: str | None = None
+    ) -> tuple:
         """Resolve a WiFi connection UUID for a setter. Returns (uuid, None)
         on success or (None, error_dict) on failure.
 
-        If active_required_msg is provided and there's no active WiFi
-        connection, fails with that specific message (e.g., "Connect to WiFi
-        first to disable IPv6"). Otherwise falls back to the most recently
-        saved connection UUID so setters can still modify a saved profile
-        while disconnected.
+        Enablers pass no owner plus a message: the active WiFi profile is
+        required (`no_wifi` otherwise). Disablers pass the setting's owner
+        UUID and work offline against that saved profile; an empty owner
+        fails with `unknown_owner` so legacy enabled-without-owner state is
+        never guessed. There is no `last_connection_uuid` fallback.
         """
-        _iface, uuid, _err = self._require_wifi()
-        if active_required_msg and not uuid:
-            return None, {
-                "success": False,
-                "error": "no_wifi",
-                "message": active_required_msg,
-            }
-        if not uuid:
-            uuid = self._get_saved_connection_uuid()
-        if not uuid:
-            return None, {
-                "success": False,
-                "error": "nmcli_failed",
-                "message": "No connection UUID found. Connect to WiFi first.",
-            }
-        return uuid, None
+        if owner_uuid:
+            return owner_uuid, None
+        if active_required_msg is not None:
+            _iface, uuid, _err = self._require_wifi()
+            if not uuid:
+                return None, {
+                    "success": False,
+                    "error": "no_wifi",
+                    "message": active_required_msg,
+                }
+            return uuid, None
+        return None, {
+            "success": False,
+            "error": "unknown_owner",
+            "message": (
+                "Setting is enabled but its network profile is unknown. "
+                "Re-apply on the desired network."
+            ),
+        }
+
+    def _clear_transferred_profile(
+        self, prev_uuid: str, uuid: str, clears: list
+    ) -> list:
+        """Best-effort clear of `clears` [(key, value)] on a previous owner
+        profile after an enable moved ownership to `uuid`. Returns
+        `transfer_warnings` (one `key: stderr` entry per failed clear).
+        Never fails the enable; never reconnects the old profile."""
+        warnings = []
+        if not prev_uuid or prev_uuid == uuid:
+            return warnings
+        for key, value in clears:
+            result = self._nmcli_modify(prev_uuid, key, value)
+            if not result["success"]:
+                detail = result.get("stderr", "")
+                warnings.append(f"{key}: {detail}")
+                decky.logger.info(
+                    f"transfer clear failed on {prev_uuid} {key}: {detail}"
+                )
+        return warnings
 
     # ---- Diagnostics ----
 
@@ -1099,8 +1122,22 @@ class Plugin:
 
     async def set_bssid_lock(self, enabled: bool) -> dict:
         try:
+            settings = _load_settings()
 
             if enabled:
+                # Legacy enabled-without-owner: refuse explicitly, keep intent.
+                if settings.get("bssid_lock_enabled") and not settings.get(
+                    "bssid_lock_connection_uuid"
+                ):
+                    return {
+                        "success": False,
+                        "error": "unknown_owner",
+                        "message": (
+                            "Setting is enabled but its network profile is unknown. "
+                            "Re-apply on the desired network."
+                        ),
+                    }
+
                 # Enabling requires active WiFi to read current BSSID
                 iface, uuid, err = self._require_wifi()
                 if err:
@@ -1123,6 +1160,7 @@ class Plugin:
                         "message": "Could not determine current BSSID",
                     }
 
+                prev_owner = settings.get("bssid_lock_connection_uuid") or ""
                 result = self._nmcli_modify(uuid, "802-11-wireless.bssid", bssid)
                 if not result["success"]:
                     return {
@@ -1132,23 +1170,38 @@ class Plugin:
                         "detail": result["stderr"],
                     }
 
+                transfer_warnings = self._clear_transferred_profile(
+                    prev_owner, uuid, [("802-11-wireless.bssid", "")]
+                )
+
                 settings = _load_settings()
                 settings["bssid_lock_enabled"] = True
                 settings["bssid_lock_value"] = bssid
                 settings["bssid_lock_connection_uuid"] = uuid
                 _save_settings_with_timestamp(settings)
                 self._hard_reconnect(uuid)
+                return {
+                    "success": True,
+                    "bssid_locked": True,
+                    "reconnected": True,
+                    "transfer_warnings": transfer_warnings,
+                }
             else:
-                # Disabling works on saved profiles - no active WiFi needed
-                iface, uuid, _ = self._require_wifi()
-                if not uuid:
-                    uuid = self._get_saved_connection_uuid()
-                if not uuid:
+                # Disabling targets the owner profile (never the foreign
+                # active one, never "last seen"); works offline.
+                owner = settings.get("bssid_lock_connection_uuid") or ""
+                if not owner:
+                    settings["bssid_lock_enabled"] = False
+                    _save_settings_with_timestamp(settings)
                     return {
-                        "success": False,
-                        "error": "nmcli_failed",
-                        "message": "No connection UUID found. Connect to WiFi first.",
+                        "success": True,
+                        "bssid_locked": False,
+                        "reconnected": False,
                     }
+
+                uuid, err = self._resolve_uuid(owner)
+                if err:
+                    return err
 
                 result = self._nmcli_modify(uuid, "802-11-wireless.bssid", "")
                 if not result["success"]:
@@ -1164,16 +1217,18 @@ class Plugin:
                 settings["bssid_lock_value"] = ""
                 settings["bssid_lock_connection_uuid"] = ""
                 _save_settings_with_timestamp(settings)
-                self._hard_reconnect(uuid)
+                active_uuid = self._get_active_connection_uuid()
+                reconnected = bool(active_uuid and active_uuid == uuid)
+                if reconnected:
+                    self._hard_reconnect(uuid)
 
-            return {"success": True, "bssid_locked": enabled, "reconnected": True}
+            return {"success": True, "bssid_locked": enabled, "reconnected": reconnected}
         except Exception as e:
             decky.logger.error(f"set_bssid_lock error: {e}")
             return self._unexpected_response(e)
 
     async def set_band_preference(self, enabled: bool, band: str = "a") -> dict:
         try:
-
             if enabled and band not in ("a", "bg"):
                 return {
                     "success": False,
@@ -1181,14 +1236,113 @@ class Plugin:
                     "message": f"Invalid band '{band}'. Must be 'a' (5 GHz) or 'bg' (2.4 GHz).",
                 }
 
-            uuid, err = self._resolve_uuid(
-                "Connect to WiFi first to set band preference" if enabled else None
-            )
+            settings = _load_settings()
+
+            if enabled:
+                # Legacy enabled-without-owner: refuse explicitly, keep intent.
+                if settings.get("band_preference_enabled") and not settings.get(
+                    "band_owner_uuid"
+                ):
+                    return {
+                        "success": False,
+                        "error": "unknown_owner",
+                        "message": (
+                            "Setting is enabled but its network profile is unknown. "
+                            "Re-apply on the desired network."
+                        ),
+                    }
+
+                uuid, err = self._resolve_uuid(
+                    None, "Connect to WiFi first to set band preference"
+                )
+                if err:
+                    return err
+
+                prev_owner = settings.get("band_owner_uuid") or ""
+                value = band
+                result = self._nmcli_modify(uuid, "802-11-wireless.band", value)
+                if not result["success"]:
+                    return {
+                        "success": False,
+                        "error": "nmcli_failed",
+                        "message": "Couldn't update band preference",
+                        "detail": result["stderr"],
+                    }
+
+                transfer_warnings = self._clear_transferred_profile(
+                    prev_owner, uuid, [("802-11-wireless.band", "")]
+                )
+
+                # Re-lock the BSSID only when this same profile owns both the
+                # band preference and the BSSID lock; otherwise the lock on
+                # the other profile is left untouched.
+                bssid_owner = settings.get("bssid_lock_connection_uuid") or ""
+                relock = bool(bssid_owner and bssid_owner == uuid)
+                if relock:
+                    self._nmcli_modify(uuid, "802-11-wireless.bssid", "")
+
+                settings = _load_settings()
+                settings["band_preference_enabled"] = True
+                settings["band_preference"] = band
+                settings["band_owner_uuid"] = uuid
+                _save_settings_with_timestamp(settings)
+
+                self._hard_reconnect(uuid)
+
+                # Re-lock BSSID to whatever AP NM picked on the new band
+                if relock:
+                    time.sleep(3)
+                    iface = self._get_wifi_interface()
+                    new_bssid = ""
+                    if iface:
+                        link_result = self._run_cmd(["/usr/bin/iw", "dev", iface, "link"])
+                        for line in link_result.get("stdout", "").split("\n"):
+                            if "Connected to" in line:
+                                parts = line.split()
+                                if len(parts) >= 3:
+                                    new_bssid = parts[2]
+                                break
+                    if not new_bssid:
+                        return {
+                            "success": False,
+                            "error": "relock_failed",
+                            "message": "Changed band but couldn't determine the new BSSID",
+                            "band": value,
+                        }
+                    relock_result = self._nmcli_modify(
+                        uuid, "802-11-wireless.bssid", new_bssid
+                    )
+                    if not relock_result["success"]:
+                        return {
+                            "success": False,
+                            "error": "relock_failed",
+                            "message": "Changed band but couldn't re-lock BSSID",
+                            "detail": relock_result["stderr"],
+                            "band": value,
+                        }
+                    settings = _load_settings()
+                    settings["bssid_lock_value"] = new_bssid
+                    _save_settings(settings)
+                    decky.logger.info(f"Re-locked BSSID to {new_bssid} after band change")
+
+                return {
+                    "success": True,
+                    "band": value,
+                    "reconnected": True,
+                    "transfer_warnings": transfer_warnings,
+                }
+
+            owner = settings.get("band_owner_uuid") or ""
+            if not owner:
+                settings["band_preference_enabled"] = False
+                _save_settings_with_timestamp(settings)
+                return {"success": True, "band": "", "reconnected": False}
+
+            uuid, err = self._resolve_uuid(owner)
             if err:
                 return err
 
-            value = band if enabled else ""
-            result = self._nmcli_modify(uuid, "802-11-wireless.band", value)
+            result = self._nmcli_modify(uuid, "802-11-wireless.band", "")
             if not result["success"]:
                 return {
                     "success": False,
@@ -1197,38 +1351,16 @@ class Plugin:
                     "detail": result["stderr"],
                 }
 
-            # Temporarily clear BSSID lock so NM can find an AP on the
-            # requested band. Re-lock to the new BSSID after reconnect.
             settings = _load_settings()
-            had_bssid_lock = settings.get("bssid_lock_enabled", False)
-            if enabled and had_bssid_lock:
-                self._nmcli_modify(uuid, "802-11-wireless.bssid", "")
-
-            settings["band_preference_enabled"] = enabled
-            settings["band_preference"] = band
+            settings["band_preference_enabled"] = False
+            settings["band_owner_uuid"] = ""
             _save_settings_with_timestamp(settings)
 
-            self._hard_reconnect(uuid)
-
-            # Re-lock BSSID to whatever AP NM picked on the new band
-            if enabled and had_bssid_lock:
-                time.sleep(3)
-                iface = self._get_wifi_interface()
-                if iface:
-                    link_result = self._run_cmd(["/usr/bin/iw", "dev", iface, "link"])
-                    for line in link_result.get("stdout", "").split("\n"):
-                        if "Connected to" in line:
-                            parts = line.split()
-                            if len(parts) >= 3:
-                                new_bssid = parts[2]
-                                self._nmcli_modify(uuid, "802-11-wireless.bssid", new_bssid)
-                                settings = _load_settings()
-                                settings["bssid_lock_value"] = new_bssid
-                                _save_settings(settings)
-                                decky.logger.info(f"Re-locked BSSID to {new_bssid} after band change")
-                            break
-
-            return {"success": True, "band": value, "reconnected": True}
+            active_uuid = self._get_active_connection_uuid()
+            reconnected = bool(active_uuid and active_uuid == uuid)
+            if reconnected:
+                self._hard_reconnect(uuid)
+            return {"success": True, "band": "", "reconnected": reconnected}
         except Exception as e:
             decky.logger.error(f"set_band_preference error: {e}")
             return self._unexpected_response(e)
@@ -1237,14 +1369,24 @@ class Plugin:
         self, enabled: bool, provider: str = "cloudflare", custom_servers: str = ""
     ) -> dict:
         try:
-
-            uuid, err = self._resolve_uuid(
-                "Connect to WiFi first to set DNS" if enabled else None
-            )
-            if err:
-                return err
+            settings = _load_settings()
 
             if enabled:
+                # Legacy enabled-without-owner: refuse explicitly, keep intent.
+                if settings.get("dns_enabled") and not settings.get("dns_owner_uuid"):
+                    return {
+                        "success": False,
+                        "error": "unknown_owner",
+                        "message": (
+                            "Setting is enabled but its network profile is unknown. "
+                            "Re-apply on the desired network."
+                        ),
+                    }
+
+                uuid, err = self._resolve_uuid(None, "Connect to WiFi first to set DNS")
+                if err:
+                    return err
+
                 if provider == "custom":
                     if not custom_servers or not custom_servers.strip():
                         return {
@@ -1262,6 +1404,7 @@ class Plugin:
                         "message": f"Unknown DNS provider '{provider}'",
                     }
 
+                prev_owner = settings.get("dns_owner_uuid") or ""
                 result = self._nmcli_modify(uuid, "ipv4.dns", servers)
                 if not result["success"]:
                     return {
@@ -1275,38 +1418,135 @@ class Plugin:
                 if not result2["success"]:
                     return {
                         "success": False,
-                        "error": "nmcli_failed",
-                        "message": "Couldn't set ignore-auto-dns",
+                        "error": "dns_partial",
+                        "message": "Couldn't set ipv4.ignore-auto-dns",
                         "detail": result2["stderr"],
                     }
-            else:
-                self._nmcli_modify(uuid, "ipv4.dns", "")
-                self._nmcli_modify(uuid, "ipv4.ignore-auto-dns", "no")
-                servers = ""
+
+                transfer_warnings = self._clear_transferred_profile(
+                    prev_owner,
+                    uuid,
+                    [("ipv4.dns", ""), ("ipv4.ignore-auto-dns", "no")],
+                )
+
+                settings = _load_settings()
+                settings["dns_enabled"] = True
+                settings["dns_provider"] = provider
+                settings["dns_servers"] = servers
+                settings["dns_owner_uuid"] = uuid
+                _save_settings_with_timestamp(settings)
+
+                self._hard_reconnect(uuid)
+                return {
+                    "success": True,
+                    "dns_set": True,
+                    "reconnected": True,
+                    "transfer_warnings": transfer_warnings,
+                }
+
+            owner = settings.get("dns_owner_uuid") or ""
+            if not owner:
+                settings["dns_enabled"] = False
+                _save_settings_with_timestamp(settings)
+                return {"success": True, "dns_set": False, "reconnected": False}
+
+            uuid, err = self._resolve_uuid(owner)
+            if err:
+                return err
+
+            result = self._nmcli_modify(uuid, "ipv4.dns", "")
+            if not result["success"]:
+                return {
+                    "success": False,
+                    "error": "nmcli_failed",
+                    "message": "Couldn't clear DNS",
+                    "detail": result["stderr"],
+                }
+            result2 = self._nmcli_modify(uuid, "ipv4.ignore-auto-dns", "no")
+            if not result2["success"]:
+                return {
+                    "success": False,
+                    "error": "nmcli_failed",
+                    "message": "Couldn't clear DNS",
+                    "detail": result2["stderr"],
+                }
 
             settings = _load_settings()
-            settings["dns_enabled"] = enabled
-            settings["dns_provider"] = provider
-            settings["dns_servers"] = servers
+            settings["dns_enabled"] = False
+            settings["dns_owner_uuid"] = ""
             _save_settings_with_timestamp(settings)
 
-            self._hard_reconnect(uuid)
-            return {"success": True, "dns_set": enabled, "reconnected": True}
+            active_uuid = self._get_active_connection_uuid()
+            reconnected = bool(active_uuid and active_uuid == uuid)
+            if reconnected:
+                self._hard_reconnect(uuid)
+            return {"success": True, "dns_set": False, "reconnected": reconnected}
         except Exception as e:
             decky.logger.error(f"set_dns error: {e}")
             return self._unexpected_response(e)
 
     async def set_ipv6(self, disabled: bool) -> dict:
         try:
+            settings = _load_settings()
 
-            uuid, err = self._resolve_uuid(
-                "Connect to WiFi first to disable IPv6" if disabled else None
-            )
+            if disabled:
+                # Legacy enabled-without-owner: refuse explicitly, keep intent.
+                if settings.get("ipv6_disabled") and not settings.get(
+                    "ipv6_owner_uuid"
+                ):
+                    return {
+                        "success": False,
+                        "error": "unknown_owner",
+                        "message": (
+                            "Setting is enabled but its network profile is unknown. "
+                            "Re-apply on the desired network."
+                        ),
+                    }
+
+                uuid, err = self._resolve_uuid(
+                    None, "Connect to WiFi first to disable IPv6"
+                )
+                if err:
+                    return err
+
+                prev_owner = settings.get("ipv6_owner_uuid") or ""
+                result = self._nmcli_modify(uuid, "ipv6.method", "disabled")
+                if not result["success"]:
+                    return {
+                        "success": False,
+                        "error": "nmcli_failed",
+                        "message": "Couldn't update IPv6 setting",
+                        "detail": result["stderr"],
+                    }
+
+                transfer_warnings = self._clear_transferred_profile(
+                    prev_owner, uuid, [("ipv6.method", "auto")]
+                )
+
+                settings = _load_settings()
+                settings["ipv6_disabled"] = True
+                settings["ipv6_owner_uuid"] = uuid
+                _save_settings_with_timestamp(settings)
+
+                self._hard_reconnect(uuid)
+                return {
+                    "success": True,
+                    "ipv6_disabled": True,
+                    "reconnected": True,
+                    "transfer_warnings": transfer_warnings,
+                }
+
+            owner = settings.get("ipv6_owner_uuid") or ""
+            if not owner:
+                settings["ipv6_disabled"] = False
+                _save_settings_with_timestamp(settings)
+                return {"success": True, "ipv6_disabled": False, "reconnected": False}
+
+            uuid, err = self._resolve_uuid(owner)
             if err:
                 return err
 
-            method = "disabled" if disabled else "auto"
-            result = self._nmcli_modify(uuid, "ipv6.method", method)
+            result = self._nmcli_modify(uuid, "ipv6.method", "auto")
             if not result["success"]:
                 return {
                     "success": False,
@@ -1316,11 +1556,19 @@ class Plugin:
                 }
 
             settings = _load_settings()
-            settings["ipv6_disabled"] = disabled
+            settings["ipv6_disabled"] = False
+            settings["ipv6_owner_uuid"] = ""
             _save_settings_with_timestamp(settings)
 
-            self._hard_reconnect(uuid)
-            return {"success": True, "ipv6_disabled": disabled, "reconnected": True}
+            active_uuid = self._get_active_connection_uuid()
+            reconnected = bool(active_uuid and active_uuid == uuid)
+            if reconnected:
+                self._hard_reconnect(uuid)
+            return {
+                "success": True,
+                "ipv6_disabled": False,
+                "reconnected": reconnected,
+            }
         except Exception as e:
             decky.logger.error(f"set_ipv6 error: {e}")
             return self._unexpected_response(e)
