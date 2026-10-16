@@ -755,6 +755,7 @@ function Content() {
         stopBackendPoll();
         backendPollTicksRef.current = 0;
         backendPollRetriesRef.current = 0;
+        backendPollInFlightRef.current = false;
         backendPollRef.current = setInterval(async () => {
             // Overlap guard (D4): skip the tick when a poll is in flight.
             if (backendPollInFlightRef.current)
@@ -1418,6 +1419,8 @@ function Content() {
                 return;
             setUpdateError("Couldn't check for updates.");
         }
+        if (disposedRef.current)
+            return;
         setCheckingUpdate(false);
     };
     const handleChannelChange = async (nextChannel) => {
@@ -1437,9 +1440,9 @@ function Content() {
                 return;
             setUpdateError("Couldn't change update channel.");
         }
-        setUpdateInfo(null);
         if (disposedRef.current)
             return;
+        setUpdateInfo(null);
         await refreshStatus();
     };
     // Don't render content until first status arrives (prevents disconnect flash).
