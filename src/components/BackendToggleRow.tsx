@@ -1,4 +1,4 @@
-import { PanelSectionRow } from "@decky/ui";
+import { PanelSectionRow, ButtonItem } from "@decky/ui";
 import type {
   BadgeStatus,
   BackendSwitchPhase,
@@ -34,6 +34,7 @@ interface BackendToggleRowProps {
   error: string | undefined;
   isBusy: boolean;
   onToggle: (on: boolean) => void;
+  onRetry: (target: "iwd" | "wpa_supplicant") => void;
 }
 
 export function BackendToggleRow({
@@ -42,15 +43,47 @@ export function BackendToggleRow({
   error,
   isBusy,
   onToggle,
+  onRetry,
 }: BackendToggleRowProps) {
-  const currentBackend = status.live?.wifi_backend || "iwd";
-  const isWpa = currentBackend === "wpa_supplicant";
+  // Desired vs effective (ST0-009 D7): config and reality are never
+  // conflated, and "" never silently defaults to iwd — unknown is an
+  // explicit branch (including when the backend tool is unavailable).
+  const toolAvailable = status.live?.backend_tool_available !== false;
+  const wiredDesired = status.live?.backend_desired;
+  const desired: string | null =
+    toolAvailable && wiredDesired && wiredDesired !== "unknown"
+      ? wiredDesired
+      : toolAvailable && status.live?.wifi_backend
+        ? status.live.wifi_backend
+        : null;
+  const wiredEffective = status.live?.backend_effective;
+  const effective: string | null =
+    toolAvailable && wiredEffective && wiredEffective !== "unknown"
+      ? wiredEffective
+      : null;
+  const diverged =
+    desired !== null && effective !== null && desired !== effective;
+  const unknownEffective = desired !== null && effective === null;
+  const retryTarget =
+    desired === "wpa_supplicant"
+      ? "wpa_supplicant"
+      : desired === "iwd"
+        ? "iwd"
+        : null;
+
+  const isWpa = desired === "wpa_supplicant";
   const switching = backendSwitch?.in_progress ?? false;
 
   // Optimistic: during a switch, reflect the target so the toggle matches
   // the user's click until the operation completes. On failure, it snaps
-  // back to the actual backend.
-  const checked = switching && backendSwitch?.target
+  // back to the actual backend. A same-target retry never takes the
+  // optimistic position: the toggle already sits at the desired value, so
+  // the row stays put until effective confirms the repair.
+  const retryInFlight =
+    switching &&
+    backendSwitch?.target != null &&
+    backendSwitch.target === desired;
+  const checked = !retryInFlight && switching && backendSwitch?.target
     ? backendSwitch.target === "wpa_supplicant"
     : isWpa;
 
@@ -58,13 +91,21 @@ export function BackendToggleRow({
     ? PHASE_TEXT[backendSwitch!.phase] || "Working…"
     : null;
 
+  const baseSubtitle = diverged
+    ? `Configured ${desired} · effective ${effective} — switch didn't take effect`
+    : unknownEffective
+      ? `Configured ${desired} · effective unknown`
+      : "Alternate WiFi backend - can fix sleep/wake and stability issues";
+
   const badge: { badge: BadgeStatus; text: string } = error
     ? { badge: "error", text: "failed" }
     : switching
       ? { badge: "unknown", text: "…" }
-      : isWpa
-        ? { badge: "active", text: "wpa_supplicant" }
-        : { badge: "off", text: "iwd" };
+      : desired === null
+        ? { badge: "unknown", text: "unknown" }
+        : isWpa
+          ? { badge: "active", text: "wpa_supplicant" }
+          : { badge: "off", text: "iwd" };
 
   // Inline result shown right under the toggle so it's visible where the
   // user clicked - the top-of-panel banner is often off-screen when the
@@ -77,7 +118,7 @@ export function BackendToggleRow({
   return (
     <InfoRow
       label="Use wpa_supplicant backend"
-      subtitle={phaseText ?? "Alternate WiFi backend - can fix sleep/wake and stability issues"}
+      subtitle={phaseText ?? baseSubtitle}
       explanation={EXPLANATION}
       badge={badge.badge}
       text={badge.text}
@@ -86,6 +127,17 @@ export function BackendToggleRow({
       error={error}
       onChange={onToggle}
     >
+      {retryTarget !== null && (diverged || unknownEffective) && !switching && (
+        <PanelSectionRow>
+          <ButtonItem
+            layout="below"
+            disabled={isBusy}
+            onClick={() => onRetry(retryTarget)}
+          >
+            {`Retry switch to ${retryTarget}`}
+          </ButtonItem>
+        </PanelSectionRow>
+      )}
       {lastResult?.success && (() => {
         const timedOut = lastResult.reconnect_timed_out;
         const parts: string[] = [`Switched to ${lastResult.backend}`];

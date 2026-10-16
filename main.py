@@ -315,12 +315,15 @@ class Plugin:
     def _has_backend_tool(self) -> bool:
         return self._get_backend_method() != "none"
 
-    def _get_current_backend(self) -> str | None:
-        """Return 'iwd', 'wpa_supplicant', or None if unknown.
+    def _read_desired_backend(self) -> tuple[str | None, str | None]:
+        """Configured-only backend: value plus the winning conf path.
 
-        Checks config files in priority order: our own generic conf, Bazzite's
-        iwd conf, SteamOS override, SteamOS defaults. Falls back to checking
-        which systemd service is active.
+        Reads the conf files in priority order (our own generic conf,
+        Bazzite's iwd conf, SteamOS override, SteamOS defaults) and
+        returns which file won. Never touches services. The old service
+        fallback was removed here (ST0-009 D1): configuration and reality
+        must not be conflated, so callers needing ground truth use
+        _read_effective_backend instead.
         """
         for path in (
             GENERIC_BACKEND_CONF,
@@ -338,21 +341,61 @@ class Plugin:
                             _, _, val = line.partition("=")
                             val = val.strip()
                             if val in ("iwd", "wpa_supplicant"):
-                                return val
+                                return (val, path)
             except FileNotFoundError:
                 continue
             except Exception:
                 continue
-        # No config found — check which service is running
-        result = self._run_cmd(["/usr/bin/systemctl", "is-active", "iwd"], timeout=3)
-        if result.get("stdout", "").strip() == "active":
-            return "iwd"
-        result = self._run_cmd(
-            ["/usr/bin/systemctl", "is-active", "wpa_supplicant"], timeout=3
-        )
-        if result.get("stdout", "").strip() == "active":
-            return "wpa_supplicant"
-        return None
+        return (None, None)
+
+    def _read_effective_backend(self) -> tuple[str | None, dict]:
+        """Effective backend from both services' is-active state.
+
+        Queries `systemctl is-active` for iwd and wpa_supplicant,
+        distinguishing active/inactive/failed/unknown (empty output means
+        unknown). The value is the target iff exactly its service is
+        active (both-active or none-active yields None). Never reads conf
+        files. The services map also carries is-enabled per service for
+        status/diagnostics. Failures degrade to unknown, never throw.
+        """
+        states = {}
+        for svc in ("iwd", "wpa_supplicant"):
+            try:
+                result = self._run_cmd(
+                    ["/usr/bin/systemctl", "is-active", svc], timeout=3
+                )
+                states[svc] = (result.get("stdout") or "").strip() or "unknown"
+            except Exception:
+                states[svc] = "unknown"
+        services = {}
+        for svc in ("iwd", "wpa_supplicant"):
+            try:
+                result = self._run_cmd(
+                    ["/usr/bin/systemctl", "is-enabled", svc], timeout=3
+                )
+                enabled = (result.get("stdout") or "").strip() or "unknown"
+            except Exception:
+                enabled = "unknown"
+            services[svc] = {"active": states[svc], "enabled": enabled}
+        iwd_active = states["iwd"] == "active"
+        wpa_active = states["wpa_supplicant"] == "active"
+        if iwd_active and not wpa_active:
+            value = "iwd"
+        elif wpa_active and not iwd_active:
+            value = "wpa_supplicant"
+        else:
+            value = None
+        return (value, services)
+
+    def _get_current_backend(self) -> str | None:
+        """Return 'iwd', 'wpa_supplicant', or None if unknown.
+
+        Configured-only (desired) value: thin wrapper over
+        _read_desired_backend. Callers needing ground truth must use
+        _read_effective_backend instead.
+        """
+        value, _source = self._read_desired_backend()
+        return value
 
     def _ensure_backend_switch_state(self):
         if not hasattr(self, "_backend_switch"):
@@ -586,7 +629,10 @@ class Plugin:
         Returns None on success, an error string on failure or on a missing
         slot (the caller then falls back to the assumed default, logs, and
         reports "fallback:<slot>"). Never throws. The "backend" slot is
-        diagnosis only: service state is never restored.
+        diagnosis only: pre-plugin restoration (reset/uninstall) never
+        restores service state. Transition-scoped D5 rollback (a failed
+        repair re-applying minutes-ago state inside the user's own requested
+        switch) is a separate path and does not go through _restore_slot.
         """
         try:
             snapshot = _load_snapshot()
@@ -706,8 +752,11 @@ class Plugin:
                 "file_backend_conf",
                 "file_dispatcher",
             ):
-                # file_backend_conf has no callers on purpose: backend scope
-                # is out, service states are never restored (only observed).
+                # file_backend_conf has no _restore_slot callers on purpose:
+                # pre-plugin restoration (reset/uninstall) never restores
+                # backend scope (only observed). The slot doubles as the D5
+                # rollback source for a failed repair, which is
+                # transition-scoped and handled inside the switch workers.
                 path = {
                     "file_nm_conf": NM_CONF_PATH,
                     "file_modprobe_conf": MODPROBE_CONF_PATH,
@@ -728,8 +777,10 @@ class Plugin:
                     except FileNotFoundError:
                         pass
             elif name == "backend":
-                # Diagnosis only, no callers: the captured service states
-                # inform debugging but are never restored.
+                # Diagnosis only, no _restore_slot callers: the captured
+                # service states inform debugging but pre-plugin restoration
+                # never restores them. Transition-scoped D5 rollback reads
+                # this slot directly inside the switch workers.
                 return "backend service state is diagnosis only (never restored)"
             elif name.startswith("profile_"):
                 if not isinstance(slot, dict):
@@ -1060,22 +1111,24 @@ class Plugin:
                     except Exception as e:
                         decky.logger.error(f"Startup power save failed: {e}")
 
-            # Sanity check: does the conf-declared backend match what's actually
-            # running? Divergence would indicate a previous switch got interrupted
-            # (plugin_loader crash, external tool, etc.). Log only; user can
-            # re-toggle to resolve.
+            # Sanity check: does the conf-declared (desired) backend match the
+            # effective (services) backend? Divergence would indicate a
+            # previous switch got interrupted (plugin_loader crash, external
+            # tool, etc.). Log only; the drift is surfaced via get_status and
+            # the user can re-toggle to resolve. No auto-repair at boot.
             if self._get_backend_method() != "none":
-                conf_backend = self._get_current_backend()
+                conf_backend, _boot_source = self._read_desired_backend()
                 if conf_backend:
-                    active = self._run_cmd(
-                        ["/usr/bin/systemctl", "is-active", conf_backend], timeout=3
+                    effective_backend, _boot_services = (
+                        self._read_effective_backend()
                     )
-                    state = (active.get("stdout") or "").strip()
-                    if state and state != "active":
+                    if effective_backend != conf_backend:
+                        effective_shown = effective_backend or "unknown"
                         decky.logger.error(
-                            f"Backend inconsistency: conf says '{conf_backend}' "
-                            f"but systemd reports '{state}'. Likely an interrupted "
-                            f"backend switch - user can retry via the UI."
+                            f"Backend inconsistency: configured '{conf_backend}' "
+                            f"but effective '{effective_shown}'. "
+                            f"Likely an interrupted backend switch - user can "
+                            f"retry via the UI."
                         )
 
             decky.logger.info(
@@ -1110,7 +1163,9 @@ class Plugin:
             # Live-state restoration from the snapshot (same owned-only
             # semantics as reset). File-backed state below is removed, so
             # file slots are not restored. Service enablement is never
-            # restored: the backend slot is diagnosis only.
+            # restored here: the backend slot is diagnosis only for
+            # pre-plugin restoration (transition-scoped D5 rollback on a
+            # failed repair is the separate, user-initiated exception).
             restore_err = None
             try:
                 restore_err = self._restore_slot("sysctl")
@@ -1493,6 +1548,22 @@ class Plugin:
             except Exception:
                 pass
             distro = self._detect_distro()
+            # Backend desired/effective triple (ST0-009 D6, additive keys).
+            # Absent or failed reads render as "unknown", never throw.
+            try:
+                diag_desired, _diag_source = self._read_desired_backend()
+                diag_effective, diag_services = self._read_effective_backend()
+                backend_triple = {
+                    "backend_desired": diag_desired or "unknown",
+                    "backend_effective": diag_effective or "unknown",
+                    "backend_services": diag_services,
+                }
+            except Exception:
+                backend_triple = {
+                    "backend_desired": "unknown",
+                    "backend_effective": "unknown",
+                    "backend_services": {},
+                }
             return {
                 "success": True,
                 "device_info": info,
@@ -1504,6 +1575,7 @@ class Plugin:
                 "distro_id": distro["id"],
                 "distro_name": distro["name"],
                 "support_tier": self._get_support_tier(),
+                **backend_triple,
             }
         except Exception as e:
             decky.logger.error(f"get_diagnostic_info error: {e}")
@@ -1568,7 +1640,17 @@ class Plugin:
             backend_available = self._has_backend_tool()
             status["live"]["backend_tool_available"] = backend_available
             if backend_available:
-                status["live"]["wifi_backend"] = self._get_current_backend() or ""
+                # Desired (configured) and effective (services) are exposed
+                # side by side (ST0-009 D6); live.wifi_backend stays the
+                # desired value for backward compatibility.
+                desired, _status_source = self._read_desired_backend()
+                effective, services = self._read_effective_backend()
+                status["live"]["wifi_backend"] = desired or ""
+                status["live"]["backend_desired"] = desired or "unknown"
+                status["live"]["backend_effective"] = effective or "unknown"
+                status["live"]["backend_services"] = services
+                if desired != effective:
+                    status["drift"]["backend"] = True
 
             if not connected:
                 status["live"]["dispatcher_installed"] = os.path.isfile(
@@ -3228,7 +3310,9 @@ class Plugin:
         the saved defaults (option R1): what the fresh settings declare
         (power_save_disabled=True, auto_fix_on_wake=True, rest False/empty)
         is what gets applied. Backend scope is out: GENERIC_BACKEND_CONF,
-        service states and 99-valve-wifi-backend.conf are untouched."""
+        service states and 99-valve-wifi-backend.conf are untouched (pre-plugin
+        restoration never restores services; transition-scoped D5 rollback on
+        a failed repair is the only path that re-applies service state)."""
         try:
             errors = []
             settings = _load_settings()
@@ -3611,14 +3695,20 @@ systemctl restart plugin_loader 2>/dev/null || true
         """
         try:
             # Snapshot-before-mutation: record the observed backend (and its
-            # service states for diagnosis) before the first write. Service
-            # state itself is never restored (ST0-009/delivery scope).
+            # service states) before the first write. The snapshot feeds
+            # diagnosis, plus the D5 rollback source on repair (repair_of):
+            # rollback re-applies this minutes-ago state inside the user's
+            # own requested transition — distinct from reset/uninstall,
+            # which never restore service state.
             try:
                 self._capture_slot("backend")
             except Exception as e:
                 decky.logger.info(
                     f"snapshot capture skipped for backend: {e}"
                 )
+            # Repair context (ST0-009 D5): popped here so the worker owns it
+            # exactly once.
+            repair_of = self._backend_switch.pop("repair_of", None)
             settings = _load_settings()
             has_wlan0_quirk = settings.get("driver") == "ath11k_pci"
             other = "iwd" if target == "wpa_supplicant" else "wpa_supplicant"
@@ -3642,13 +3732,77 @@ systemctl restart plugin_loader 2>/dev/null || true
             )
             if not write_result["success"]:
                 detail = (write_result.get("stderr") or write_result.get("stdout") or "")[:200]
+                rolled_back = False
+                rollback_note = ""
+                if repair_of is not None:
+                    # Repair rollback via the helper route (ST0-009 D5):
+                    # write_config the previous target, restart units,
+                    # re-enable/restart the previous service, restart NM,
+                    # verify effective — best effort, each step reported.
+                    try:
+                        rb_snapshot = _load_snapshot()
+                    except Exception:
+                        rb_snapshot = {}
+                    rb_slot = rb_snapshot.get("backend") if isinstance(rb_snapshot, dict) else None
+                    rb_prev = rb_slot.get("backend") if isinstance(rb_slot, dict) else None
+                    if rb_prev not in ("iwd", "wpa_supplicant"):
+                        rollback_note = "rollback skipped: no previous backend in snapshot"
+                    else:
+                        rb_ok = True
+                        rb_write = await asyncio.to_thread(
+                            self._run_cmd, [BACKEND_HELPER, "write_config", rb_prev], 5, True
+                        )
+                        if not rb_write["success"]:
+                            rb_ok = False
+                            rollback_note = f"rollback write_config failed: {(rb_write.get('stderr') or '')[:100]}"
+                        rb_restart = await asyncio.to_thread(
+                            self._run_cmd, [BACKEND_HELPER, "restart_units", target], 45, True
+                        )
+                        if not rb_restart["success"]:
+                            rb_ok = False
+                            rb_restart_note = f"rollback restart_units failed: {(rb_restart.get('stderr') or '')[:100]}"
+                            if rollback_note:
+                                rollback_note = f"{rollback_note}; {rb_restart_note}"
+                            else:
+                                rollback_note = rb_restart_note
+                        rb_problems = []
+                        for rb_name, rb_cmd in (
+                            ("enable", ["/usr/bin/systemctl", "enable", rb_prev]),
+                            ("start", ["/usr/bin/systemctl", "start", rb_prev]),
+                            ("nm", ["/usr/bin/systemctl", "restart", "NetworkManager"]),
+                        ):
+                            rb_tail = await asyncio.to_thread(self._run_cmd, rb_cmd, 10, True)
+                            if not rb_tail["success"]:
+                                rb_problems.append(rb_name)
+                        rb_value, _rb_services = await asyncio.to_thread(
+                            self._read_effective_backend
+                        )
+                        if rb_ok and not rb_problems and rb_value == rb_prev:
+                            rolled_back = True
+                            rollback_note = f"rolled back to {rb_prev}"
+                        elif not rollback_note:
+                            if rb_problems:
+                                rb_why = "tail failed: " + ",".join(rb_problems)
+                            else:
+                                rb_shown = rb_value or "unknown"
+                                rb_why = f"effective is {rb_shown}"
+                            rollback_note = f"rollback to {rb_prev} incomplete: {rb_why}"
+                if rollback_note:
+                    if detail:
+                        detail = f"{detail} | {rollback_note}"
+                    else:
+                        detail = rollback_note
                 self._backend_switch["phase"] = "failed"
-                self._backend_switch["result"] = {
+                write_failed_result = {
                     "success": False,
                     "target": target,
+                    "repair_of": repair_of,
                     "message": self._friendly_backend_error(detail),
                     "detail": detail,
                 }
+                if repair_of is not None:
+                    write_failed_result["rolled_back"] = rolled_back
+                self._backend_switch["result"] = write_failed_result
                 decky.logger.error(
                     f"backend switch failed at write_config: rc={write_result.get('returncode')}, "
                     f"detail={detail!r}"
@@ -3690,10 +3844,18 @@ systemctl restart plugin_loader 2>/dev/null || true
                     elapsed += 1
                 reconnect_timed_out = not reconnected
 
-            # Verify final system state
-            final_backend = await asyncio.to_thread(self._get_current_backend)
+            # Verify final system state against effective ground truth
+            # (ST0-009 D4), never the just-written conf. reconnect_timed_out
+            # stays a connectivity flag: it is reported side by side and
+            # never flips an effective-true transition to false.
+            final_backend, _steamos_services = await asyncio.to_thread(
+                self._read_effective_backend
+            )
 
             if needs_reboot:
+                # No rollback here: the interface is gone and the helper's
+                # recovery already ran; the needs_reboot flag must survive
+                # so the gate keeps rejecting until a reboot heals it.
                 self._backend_switch["phase"] = "failed"
                 self._backend_switch["result"] = {
                     "success": False,
@@ -3701,21 +3863,97 @@ systemctl restart plugin_loader 2>/dev/null || true
                     "target": target,
                     "recovery_performed": False,
                     "needs_reboot": True,
+                    "repair_of": repair_of,
                     "message": "Backend switched but wlan0 didn't come back. Reboot required.",
                 }
             elif not restart_result["success"] or final_backend != target:
-                detail = rs_stderr[:200] or rs_stdout[:200]
+                if final_backend != target:
+                    failure_code = "effective_mismatch"
+                    mismatch_shown = final_backend or "unknown"
+                    detail = (
+                        f"expected effective backend '{target}' but services "
+                        f"report '{mismatch_shown}'"
+                    )[:200]
+                else:
+                    # The restart helper reported failure but effective
+                    # converged on the target: keep the failed verdict
+                    # (existing check) without a misleading mismatch code.
+                    failure_code = None
+                    detail = rs_stderr[:200] or rs_stdout[:200]
+                rolled_back = False
+                rollback_note = ""
+                if repair_of is not None:
+                    try:
+                        rb_snapshot = _load_snapshot()
+                    except Exception:
+                        rb_snapshot = {}
+                    rb_slot = rb_snapshot.get("backend") if isinstance(rb_snapshot, dict) else None
+                    rb_prev = rb_slot.get("backend") if isinstance(rb_slot, dict) else None
+                    if rb_prev not in ("iwd", "wpa_supplicant"):
+                        rollback_note = "rollback skipped: no previous backend in snapshot"
+                    else:
+                        rb_ok = True
+                        rb_write = await asyncio.to_thread(
+                            self._run_cmd, [BACKEND_HELPER, "write_config", rb_prev], 5, True
+                        )
+                        if not rb_write["success"]:
+                            rb_ok = False
+                            rollback_note = f"rollback write_config failed: {(rb_write.get('stderr') or '')[:100]}"
+                        rb_restart = await asyncio.to_thread(
+                            self._run_cmd, [BACKEND_HELPER, "restart_units", target], 45, True
+                        )
+                        if not rb_restart["success"]:
+                            rb_ok = False
+                            rb_restart_note = f"rollback restart_units failed: {(rb_restart.get('stderr') or '')[:100]}"
+                            if rollback_note:
+                                rollback_note = f"{rollback_note}; {rb_restart_note}"
+                            else:
+                                rollback_note = rb_restart_note
+                        rb_problems = []
+                        for rb_name, rb_cmd in (
+                            ("enable", ["/usr/bin/systemctl", "enable", rb_prev]),
+                            ("start", ["/usr/bin/systemctl", "start", rb_prev]),
+                            ("nm", ["/usr/bin/systemctl", "restart", "NetworkManager"]),
+                        ):
+                            rb_tail = await asyncio.to_thread(self._run_cmd, rb_cmd, 10, True)
+                            if not rb_tail["success"]:
+                                rb_problems.append(rb_name)
+                        rb_value, _rb_services = await asyncio.to_thread(
+                            self._read_effective_backend
+                        )
+                        final_backend = rb_value
+                        if rb_ok and not rb_problems and rb_value == rb_prev:
+                            rolled_back = True
+                            rollback_note = f"rolled back to {rb_prev}"
+                        elif not rollback_note:
+                            if rb_problems:
+                                rb_why = "tail failed: " + ",".join(rb_problems)
+                            else:
+                                rb_shown = rb_value or "unknown"
+                                rb_why = f"effective is {rb_shown}"
+                            rollback_note = f"rollback to {rb_prev} incomplete: {rb_why}"
+                if rollback_note:
+                    if detail:
+                        detail = f"{detail} | {rollback_note}"
+                    else:
+                        detail = rollback_note
                 self._backend_switch["phase"] = "failed"
-                self._backend_switch["result"] = {
+                mismatch_result = {
                     "success": False,
                     "backend": final_backend,
                     "target": target,
                     "recovery_performed": recovery_performed,
                     "needs_reboot": False,
                     "reconnect_timed_out": reconnect_timed_out,
+                    "repair_of": repair_of,
                     "message": self._friendly_backend_error(detail),
                     "detail": detail,
                 }
+                if failure_code is not None:
+                    mismatch_result["errors"] = [failure_code]
+                if repair_of is not None:
+                    mismatch_result["rolled_back"] = rolled_back
+                self._backend_switch["result"] = mismatch_result
             else:
                 self._backend_switch["phase"] = "done"
                 self._backend_switch["result"] = {
@@ -3725,6 +3963,8 @@ systemctl restart plugin_loader 2>/dev/null || true
                     "recovery_performed": recovery_performed,
                     "needs_reboot": False,
                     "reconnect_timed_out": reconnect_timed_out,
+                    "repair_of": repair_of,
+                    "errors": [],
                 }
             decky.logger.info(
                 f"backend switch: target={target}, final={final_backend}, "
@@ -3754,8 +3994,12 @@ systemctl restart plugin_loader 2>/dev/null || true
         """Backend switch for non-SteamOS systems (Bazzite, CachyOS, etc.).
         Writes NM config directly and manages systemd services."""
         try:
-            # Snapshot-before-mutation: backend observation for diagnosis
-            # plus the generic conf file this worker overwrites below.
+            # Snapshot-before-mutation: backend observation plus the generic
+            # conf file this worker overwrites below. The snapshot feeds
+            # diagnosis, plus the D5 rollback source on repair (repair_of):
+            # rollback re-applies this minutes-ago state inside the user's
+            # own requested transition — distinct from reset/uninstall,
+            # which never restore service state.
             for slot_name in ("backend", "file_backend_conf"):
                 try:
                     self._capture_slot(slot_name)
@@ -3763,10 +4007,17 @@ systemctl restart plugin_loader 2>/dev/null || true
                     decky.logger.info(
                         f"snapshot capture skipped for {slot_name}: {e}"
                     )
+            # Repair context (ST0-009 D5): set by start_backend_switch when
+            # the same-target retry heals divergence; popped here so the
+            # worker owns it exactly once.
+            repair_of = self._backend_switch.pop("repair_of", None)
             other = "iwd" if target == "wpa_supplicant" else "wpa_supplicant"
 
             self._backend_switch["phase"] = "switching"
-            decky.logger.info(f"generic backend switch: {other} -> {target}")
+            decky.logger.info(
+                f"generic backend switch: {other} -> {target} "
+                f"(repair_of={repair_of})"
+            )
 
             os.makedirs(os.path.dirname(GENERIC_BACKEND_CONF), exist_ok=True)
             if target == "iwd":
@@ -3776,47 +4027,69 @@ systemctl restart plugin_loader 2>/dev/null || true
                 with open(GENERIC_BACKEND_CONF, "w") as f:
                     f.write("[device]\nwifi.backend=wpa_supplicant\n")
 
-            # Stop old, enable + start new, restart NM
-            for cmd in [
-                ["/usr/bin/systemctl", "stop", other],
-                ["/usr/bin/systemctl", "disable", other],
-                ["/usr/bin/systemctl", "enable", target],
-                ["/usr/bin/systemctl", "start", target],
+            # Checked transition (ST0-009 D3): every systemctl step is
+            # verified; the first failure wins with its named code in
+            # errors[] — never conf-echo success from the write above.
+            failure_code = None
+            failure_detail = ""
+            for code, cmd in [
+                ("backend_stop_failed", ["/usr/bin/systemctl", "stop", other]),
+                ("backend_disable_failed", ["/usr/bin/systemctl", "disable", other]),
+                ("backend_enable_failed", ["/usr/bin/systemctl", "enable", target]),
+                ("backend_start_failed", ["/usr/bin/systemctl", "start", target]),
             ]:
-                await asyncio.to_thread(self._run_cmd, cmd, 10, True)
+                step_result = await asyncio.to_thread(self._run_cmd, cmd, 10, True)
+                if not step_result["success"]:
+                    failure_code = code
+                    failure_detail = (
+                        step_result.get("stderr")
+                        or step_result.get("stdout")
+                        or ""
+                    )[:200]
+                    break
+            if failure_code is None:
+                restart = await asyncio.to_thread(
+                    self._run_cmd,
+                    ["/usr/bin/systemctl", "restart", "NetworkManager"],
+                    15,
+                    True,
+                )
+                if not restart["success"]:
+                    failure_code = "nm_restart_failed"
+                    failure_detail = (restart.get("stderr", "") or "")[:200]
 
-            restart = await asyncio.to_thread(
-                self._run_cmd,
-                ["/usr/bin/systemctl", "restart", "NetworkManager"],
-                15,
-                True,
+            # Phase: reconnecting. Skipped when a step already failed (there
+            # is no new backend coming up; rollback runs instead). The flag
+            # stays connectivity-only: it never flips an effective-true
+            # transition to false, and an effective-false transition never
+            # hides behind it — both are reported side by side.
+            reconnect_timed_out = False
+            if failure_code is None:
+                self._backend_switch["phase"] = "reconnecting"
+                reconnect_timed_out = True
+                for _ in range(15):
+                    await asyncio.sleep(1)
+                    iface = await asyncio.to_thread(self._get_wifi_interface)
+                    if iface:
+                        uuid = await asyncio.to_thread(self._get_active_connection_uuid)
+                        if uuid:
+                            reconnect_timed_out = False
+                            break
+
+            # Effective verification (ST0-009 D4): compare the services
+            # ground truth against the target, never the just-written conf.
+            final_backend, _final_services = await asyncio.to_thread(
+                self._read_effective_backend
             )
-            if not restart["success"]:
-                detail = restart.get("stderr", "")[:200]
-                self._backend_switch["phase"] = "failed"
-                self._backend_switch["result"] = {
-                    "success": False,
-                    "target": target,
-                    "message": self._friendly_backend_error(detail),
-                    "detail": detail,
-                }
-                return
+            if failure_code is None and final_backend != target:
+                failure_code = "effective_mismatch"
+                final_shown = final_backend or "unknown"
+                failure_detail = (
+                    f"expected effective backend '{target}' but services "
+                    f"report '{final_shown}'"
+                )[:200]
 
-            # Phase: reconnecting
-            self._backend_switch["phase"] = "reconnecting"
-            reconnect_timed_out = True
-            for _ in range(15):
-                await asyncio.sleep(1)
-                iface = await asyncio.to_thread(self._get_wifi_interface)
-                if iface:
-                    uuid = await asyncio.to_thread(self._get_active_connection_uuid)
-                    if uuid:
-                        reconnect_timed_out = False
-                        break
-
-            final_backend = await asyncio.to_thread(self._get_current_backend)
-
-            if final_backend == target:
+            if failure_code is None:
                 self._backend_switch["phase"] = "done"
                 self._backend_switch["result"] = {
                     "success": True,
@@ -3825,18 +4098,88 @@ systemctl restart plugin_loader 2>/dev/null || true
                     "recovery_performed": False,
                     "needs_reboot": False,
                     "reconnect_timed_out": reconnect_timed_out,
+                    "repair_of": repair_of,
+                    "errors": [],
                 }
             else:
+                rolled_back = False
+                rollback_note = ""
+                if repair_of is not None:
+                    # Repair rollback (ST0-009 D5): restore the previous
+                    # conf layer (snapshot bytes, else delete the generic
+                    # conf to uncover the prior layer), re-enable/restart
+                    # the previous service, restart NM, and verify
+                    # effective — best effort, each step reported.
+                    try:
+                        snapshot = _load_snapshot()
+                    except Exception:
+                        snapshot = {}
+                    slot = snapshot.get("backend") if isinstance(snapshot, dict) else None
+                    prev = slot.get("backend") if isinstance(slot, dict) else None
+                    file_slot = snapshot.get("file_backend_conf") if isinstance(snapshot, dict) else None
+                    if prev not in ("iwd", "wpa_supplicant"):
+                        rollback_note = (
+                            "rollback skipped: no previous backend in snapshot"
+                        )
+                    else:
+                        conf_ok = True
+                        try:
+                            if isinstance(file_slot, dict) and file_slot.get("exists"):
+                                os.makedirs(os.path.dirname(GENERIC_BACKEND_CONF), exist_ok=True)
+                                with open(GENERIC_BACKEND_CONF, "w") as f:
+                                    f.write(file_slot.get("content") or "")
+                            else:
+                                try:
+                                    os.remove(GENERIC_BACKEND_CONF)
+                                except FileNotFoundError:
+                                    pass
+                        except Exception as e:
+                            conf_ok = False
+                            rollback_note = f"rollback conf restore failed: {e}"
+                        tail_problems = []
+                        for step_name, step_cmd in (
+                            ("enable", ["/usr/bin/systemctl", "enable", prev]),
+                            ("start", ["/usr/bin/systemctl", "start", prev]),
+                            ("nm", ["/usr/bin/systemctl", "restart", "NetworkManager"]),
+                        ):
+                            tail_result = await asyncio.to_thread(
+                                self._run_cmd, step_cmd, 10, True
+                            )
+                            if not tail_result["success"]:
+                                tail_problems.append(step_name)
+                        rolled_value, _rolled_services = await asyncio.to_thread(
+                            self._read_effective_backend
+                        )
+                        if conf_ok and not tail_problems and rolled_value == prev:
+                            rolled_back = True
+                            rollback_note = f"rolled back to {prev}"
+                        elif not rollback_note:
+                            if tail_problems:
+                                why = "tail failed: " + ",".join(tail_problems)
+                            else:
+                                rolled_shown = rolled_value or "unknown"
+                                why = f"effective is {rolled_shown}"
+                            rollback_note = f"rollback to {prev} incomplete: {why}"
+                        final_backend = rolled_value
+                detail = failure_detail
+                if rollback_note:
+                    detail = f"{detail} | {rollback_note}" if detail else rollback_note
                 self._backend_switch["phase"] = "failed"
-                self._backend_switch["result"] = {
+                failed_result = {
                     "success": False,
                     "backend": final_backend,
                     "target": target,
                     "recovery_performed": False,
                     "needs_reboot": False,
                     "reconnect_timed_out": reconnect_timed_out,
-                    "message": f"Expected {target} but got {final_backend}. A reboot may help.",
+                    "repair_of": repair_of,
+                    "errors": [failure_code],
+                    "message": self._friendly_backend_error(failure_detail),
+                    "detail": detail,
                 }
+                if repair_of is not None:
+                    failed_result["rolled_back"] = rolled_back
+                self._backend_switch["result"] = failed_result
 
             decky.logger.info(
                 f"generic backend switch: target={target}, final={final_backend}, "
@@ -3897,28 +4240,66 @@ systemctl restart plugin_loader 2>/dev/null || true
                 "result": None,
             })
             reserved = True
-            current = await asyncio.to_thread(self._get_current_backend)
-            if current == backend:
+            # Outstanding reboot (in-memory only) takes precedence even over
+            # full agreement: the latest terminal result demands a reboot
+            # and no later terminal success cleared it. Rejected here, never
+            # reported as already_set. Read from the pre-reserve snapshot:
+            # the reserve update above clears result for the new attempt.
+            previous_result = previous_state.get("result")
+            if (
+                isinstance(previous_result, dict)
+                and previous_result.get("needs_reboot")
+                and not previous_result.get("success")
+            ):
+                return {
+                    "accepted": False,
+                    "reason": "needs_reboot",
+                    "message": (
+                        "A previous backend switch needs a reboot before "
+                        "switching again."
+                    ),
+                }
+            # Converged gate (ST0-009 D2): already_set is a rejected no-op
+            # only when desired AND effective agree on the target. Desired
+            # without effective agreement is divergence, accepted as repair.
+            desired, _desired_source = await asyncio.to_thread(
+                self._read_desired_backend
+            )
+            effective, _effective_services = await asyncio.to_thread(
+                self._read_effective_backend
+            )
+            if desired == backend and effective == backend:
                 return {
                     "accepted": False,
                     "reason": "already_set",
                     "message": f"Backend is already {backend}.",
-                    "backend": current,
+                    "backend": desired,
                 }
+            repair = desired == backend and effective != backend
 
             # Route to the appropriate worker based on backend method
             method = self._get_backend_method()
+            if repair:
+                # Repair context for the worker: a same-target retry heals
+                # divergence; on failure the worker rolls back to the
+                # previous backend (ST0-009 D5). Cleared below on rejection;
+                # the worker pops it once launched, so no stale flag survives.
+                self._backend_switch["repair_of"] = backend
             if method == "steamos":
                 worker = self._backend_switch_worker(backend)
             else:
                 worker = self._generic_backend_switch_worker(backend)
             self._backend_switch_task = asyncio.create_task(worker)
             launched = True
-            decky.logger.info(f"backend switch started: {current} -> {backend}")
+            decky.logger.info(
+                f"backend switch started: {desired} -> {backend} "
+                f"(repair={repair})"
+            )
             return {
                 "accepted": True,
                 "target": backend,
-                "from": current,
+                "from": desired,
+                "repair": repair,
             }
         except Exception as e:
             decky.logger.error(f"start_backend_switch error: {e}")
@@ -3932,6 +4313,8 @@ systemctl restart plugin_loader 2>/dev/null || true
                 if worker is not None:
                     worker.close()
                 self._backend_switch.update(previous_state)
+                # Transient repair context never survives a rejection.
+                self._backend_switch.pop("repair_of", None)
 
     async def get_backend_switch_status(self) -> dict:
         """Return current phase and, when terminal, the final result."""
