@@ -32,9 +32,10 @@ stays open; no Stable, no version bump, no Watchdog. Backend effective-state
   "activation": {...} | None when no uuid}, "verified": bool,
   "active_uuid_after": str | None, "radio_off_without_on": bool}`.
   `verified` = `radio_on` ok + activation ok when requested + live active UUID
-  equals the requested uuid after verification polling: up to 3 checks, 2s
-  command timeout each (status quantum), `asyncio.sleep(1)` between tries, total
-  budget ≤5s; timeout yields `verified: False`, never an error. Never throws
+  equals the requested uuid after verification polling: up to 2 checks, 2s
+  command timeout each (status quantum), one `time.sleep(1)` between tries
+  (sync def, same mechanism as the existing band-relock pause), total budget
+  ≈5s; timeout yields `verified: False`, never an error. Never throws
   (`_run_cmd` never throws). A `radio-on` failure after a successful `radio-off`
   sets `radio_off_without_on: True` since the radio may be dead. No radio
   recovery attempts: report, don't mask (findings ask for recovery; this package
@@ -44,7 +45,7 @@ stays open; no Stable, no version bump, no Watchdog. Backend effective-state
   `reconnect` detail with exact shape: skipped → `{"attempted": False,
   "skipped": "offline" | "foreign_owner"}` (never attempted); attempted →
   `{"attempted": True, "stages": {...}, "verified": bool,
-  "active_uuid_after": ...}` (stage dicts per D1). Profile intent already written
+  "active_uuid_after": ..., "radio_off_without_on": bool}` (stages and flag per D1). Profile intent already written
   stays written: `success` reflects the mutation, `reconnected` reflects the
   verification. Aggregates (`optimize_safe`, `reapply_all`): top-level `success`
   is `False` when any child `success` is `False` (counts `applied/total` kept);
