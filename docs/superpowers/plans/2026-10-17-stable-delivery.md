@@ -31,10 +31,20 @@
 
 ### Task 0: Docs (D8)
 
-**Files:** decision-doc status + findings handoff + ROADMAP note + AGENTS.md/CONTRIBUTING.md/README.md/branding beta lines + recovery/identity beta points + findings Beta-identity MOOT + inventory footnote (wordings from analysis; SteamOS-Beta mentions untouched).
+**Files:** decision-doc status + findings handoff + ROADMAP note + AGENTS.md/CONTRIBUTING.md/README.md/branding beta lines + recovery/identity beta points + findings Beta-identity MOOT + inventory footnote. SteamOS-Beta mentions stay untouched: `AGENTS.md:20-21` (OS coverage), `ROADMAP.md:13`, `stage-0.md:32,43,69,71`, `findings:256,259`, `steam-deck-lcd-stable.md:55`. Rollout history (`delivery-workflow-design.md`, `plans/2026-10-15-delivery-workflow.md`) is immutable history — leave, do not beta-scrub.
 
-- [ ] **Step 1: Implement** all listed doc edits with the ready-made wordings.
-- [ ] **Step 2: Verify** `grep -ri "beta" <each file>` shows only SteamOS-Beta contexts (explicitly listed) + historical inventory fact + MOOT note.
+- [ ] **Step 1: Implement** (exact wordings):
+  - decision-doc header status → `Status: **SUPERSEDED 2026-10-17 by owner decision: A1 DEFERRED, custom updater RETAINED + hardened, Beta DROPPED, Store AFTER 2–3 roadmap goals (Stage 0+1+2). A1 analysis below retained as reference.**`
+  - decision-doc: append `## Owner decision 2026-10-17` section (A1 deferred rationale; custom retained+hardened scope; Beta dropped + stored-`"beta"`-migrates note; Store after 0+1+2); P1 → drop-Beta + harden-Stable-updater (replaces retire-the-updater); P4 → Store DEFERRED phrasing; sign-off item 3 → `[DECIDED 2026-10-17] Beta channel dropped; Stable-only until Store (see P4)`; add item 7 for the deferral decision.
+  - findings handoff item 2 → hardened-Stable-only wording + `Update 2026-10-17: delivery direction decided — A1 deferred, custom Stable-only updater retained + hardened, Beta dropped; item 2 rewritten accordingly.`; open question `**Beta identity**` → append `[DROPPED with the Beta channel — no action]` + moot rationale.
+  - ROADMAP `## Versions and delivery` += Stable-only distribution paragraph (GitHub releases + in-app Stable updater + `install.sh` rescue; no Beta; Store deferred until Stage 0 + Stage 1 + Stage 2 closed).
+  - `AGENTS.md:10` → `No 'beta' branch or channel is maintained; Stable-only distribution. The in-app updater consumes Stable GitHub releases only.`; `AGENTS.md:36` → `Stable updates use this fork's latest published GitHub release, tagged 'v<version>' with a matching 'package.json' version. No Beta channel exists; never fall back to the upstream repository.`
+  - `CONTRIBUTING.md` beta paragraph → `Stable checks the fork's latest GitHub release and downloads the matching 'v<version>' tag. There is no Beta channel or 'beta' branch. The installer can fall back to this fork's 'main' when no release tag is available; the in-app Stable updater has no fallback. Never substitute the upstream repository.`
+  - `README.md` update paragraph → `In-app Stable updates require a published GitHub release with a 'v<version>' tag. There is no Beta channel.`
+  - `docs/branding.md` archive-roots entry → drop the `wifi-optimizer-tms-beta` root + beta-branch sentence.
+  - recovery spec → cut the Beta point (`:41,48`-area); identity spec → cut the `wifi-optimizer-tms-beta` point (`:38`-area). Both stay conditional proposals otherwise.
+  - inventory `results/2026-10-16-owner-device-inventory.md:31` → append (no fact change): `This is a pre-decision observation; the Beta channel is dropped and 'update_channel' is to be removed, with existing 'beta' values migrated to Stable.`
+- [ ] **Step 2: Verify** `grep -ri "beta" <each file>` shows only the SteamOS-Beta contexts listed above + the historical inventory fact + the MOOT note.
 - [ ] **Step 3: Commit** `git add <docs>; git commit -m "docs: Stable-only delivery direction (drop Beta)"`
 
 ### Task 1: Fixture + red tests (job/staging/identity/exclusion)
@@ -64,9 +74,9 @@
 - Produces: no beta branch reads/downloads; no channel selector; key removed with automatic strip-migration; ex-beta version rule kept; collector tolerates old `"beta"`.
 
 - [ ] **Step 1: Verify red** Expected: FAIL on `beta_channel_gone` (+ typecheck for removed props).
-- [ ] **Step 2a: Backend branches → Stable-only** (keep ex-beta version rule + docstrings updated with code).
-- [ ] **Step 2b: Frontend selector removal** (dropdown/handler/wrapper/props; main toggle paths use Stable).
-- [ ] **Step 2c: `set_update_channel` + key removal + collector tolerance.**
+- [ ] **Step 2a: Frontend selector removal first** (keeps every intermediate state green): dropdown/handler/`setUpdateChannel`-wrapper export/props in `UpdatesSection` + `index.tsx` + `backend.ts` (stable `checkForUpdate`/`applyUpdate` wrappers stay — only the channel wrapper goes) + `types.ts` channel fields.
+- [ ] **Step 2b: Backend branches → Stable-only** (keep ex-beta version rule + docstrings updated with code).
+- [ ] **Step 2c: `set_update_channel` + key removal + collector record-raw-with-note.**
 - [ ] **Step 3: Run** `python -m unittest tests.test_delivery_update -v` Expected: beta test PASS. `tsc --noEmit --skipLibCheck` exit 0. `pnpm run build` exit 0.
 - [ ] **Step 4: Run full suite** green + `py_compile`.
 - [ ] **Step 5: Commit** `git add main.py src types tests scripts; git commit -m "fix: drop Beta channel, Stable-only updates"`
@@ -82,12 +92,12 @@
 - Produces: accepted/reject shapes, phase machine, private script path, same-fs staging gate, identity checks, ordered `os.replace` commit, withheld restart on partial, error codes per D5.
 
 - [ ] **Step 1: Verify red** Expected: FAIL on job/staging/identity/exclusion tests.
-- [ ] **Step 2a: Implement job + cross-exclusion** per D2.
+- [ ] **Step 2a: Implement job + cross-exclusion** per D2 (phase enum + reason vocabulary; guard both directions incl. the ST0-010 reservation site).
 - [ ] **Step 2b: Implement staging + validated transfer/identity** per D3/D4.
-- [ ] **Step 2c: Implement commit + restart/reporting** per D3/D5 (no live-dir removal anywhere).
+- [ ] **Step 2c: Implement commit + restart/reporting** per D3/D5 (no live-dir removal anywhere) + typed start/result shapes in `src/types.ts` (`UpdateStartResult {accepted, target, reason, job_id}`, `get_status.update_job` summary, triple/result keys) + rewrite `scripts/check_delivery.py` updater guards + `SyntaxTests` to the new contract.
 - [ ] **Step 3: Run** `python -m unittest tests.test_delivery_update -v` Expected: PASS.
-- [ ] **Step 4: Run full suite + syntax** `python -m unittest discover -s tests`; `check-syntax`; `py_compile`.
-- [ ] **Step 5: Commit** `git add main.py tests/test_delivery_update.py; git commit -m "fix: staged single-job Stable updater with truthful results"`
+- [ ] **Step 4: Run full suite + syntax** `python -m unittest discover -s tests` (must include green `tests/test_backend_reservation.py` + `tests/test_backend_state.py` — the reservation-pattern net D2 reuses, before the full run); `check-syntax`; `py_compile`.
+- [ ] **Step 5: Commit** `git add main.py src/types.ts tests/test_delivery_update.py scripts/check_delivery.py tests/test_delivery.py; git commit -m "fix: staged single-job Stable updater with truthful results"`
 
 ### Task 4: install.sh rescue (D6)
 
@@ -102,8 +112,8 @@
 ### Task 5: Frontend exclusion wiring (D7) + dist rebuild
 
 **Files:**
-- Modify: `src/index.tsx` (Update Now disabled during switch; backend toggle disabled while updating; busy on accepted; terminal/fail/timeout clear after forced refresh)
-- Test: typecheck + build + review checklist
+- Modify: `src/index.tsx` (`handleApplyUpdate` rewritten for the accepted/start shape per D5, `handleCheckForUpdate`, 60 s timeout copy as "status unknown — verify version after restart", retry-after-timeout path yielding `in_progress` rejection copy; Update Now disabled during switch; backend toggle disabled while updating; busy on accepted; terminal/fail/timeout clear after forced refresh)
+- Test: typecheck + build + review checklist (timeout copy + accepted-shape branches covered)
 
 - [ ] **Step 1: Implement** per D7 (no new global gate).
 - [ ] **Step 2: Verify** `tsc` exit 0, build exit 0 (record hash, `dist/` diff only from this package).
@@ -116,7 +126,7 @@
 - Modify: `docs/audits/2026-10-15-stage-0-findings.md` (ST0-001/002/003/018 evidence; remaining: none — see note)
 - Test: none (docs only)
 
-Note: this package closes the last open findings (3 Important + 1 Minor). The findings doc must then record Stage 0 code-complete pending candidate device validation (NOT Stage 0 closure — validation + release still required).
+Note: this package closes the last open findings (3 Important + 1 Minor). The findings doc must then record Stage 0 code-complete pending candidate device validation (NOT Stage 0 closure — validation + release still required). Also mark the two designed-out open questions (fixed-`/tmp` script path, shell interpolation in the updater) as gone with this package, while leaving event-loop blocking, dispatcher races, and adapter coverage explicitly open.
 
 - [ ] **Step 1: Update findings** correction evidence for ST0-001/002/003/018; record code-complete pending device validation.
 - [ ] **Step 2: Verify** via `git status --short`.
