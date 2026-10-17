@@ -204,7 +204,7 @@ Dopiero po zielonej weryfikacji wolno (za osobną zgodą) wykonywać scenariusze
 
 Red flags — którykolwiek oznacza natychmiastowy stop testów i rollback (nie „jeszcze jeden reconnect"):
 
-- Brak WiFi po deplo deployment/Resecie (profil nie wraca, `nmcli` pokazuje rozłączenie mimo prób `con up`).
+- Brak WiFi po deployu albo po Resecie (profil nie wraca, `nmcli` pokazuje rozłączenie mimo prób `con up`).
 - Loader nie wraca do `active` po restarcie (oba ścieżki §3).
 - Wersja/hash po starcie niezgodne z kandydatem (`load_unconfirmed`).
 - Błędy `errors[]` / `fallback:*` w wynikach operacji restore/reset (snapshot slot missing — fallback na assumed defaults, nie na stan sprzed sesji).
@@ -297,8 +297,10 @@ Ustalenia z sesji walidacyjnych 2026-10-17, obowiązujące dopóki urządzenie/w
 
 ### Deploy kandydata — ustalona praktyka (ścieżka B, staging)
 
-Do czasu pierwszej publikacji na GitHubie (brak release) `install.sh` **nie
-może** pobrać kandydata. Stosowana procedura:
+Do czasu pierwszej publikacji na GitHubie `install.sh` nie ma przypiętego
+artefaktu kandydata: spada wtedy na gałąź `main` (AGENTS.md), która nie jest
+immutabilnym kandydatem — dlatego deploy kandydata robi się stagingiem
+(poniżej), nie `install.sh`. Stosowana procedura:
 
 1. Agent buduje kandydata lokalnie (Git Bash/CMD: `pnpm install --frozen-lockfile`,
    `pnpm run build` dla każdego wdrożenia pakietu) i przygotowuje katalog
@@ -312,13 +314,17 @@ może** pobrać kandydata. Stosowana procedura:
    `sudo systemctl restart plugin_loader`,
    `systemctl is-active plugin_loader`.
 
-Braki: jeśli `FILES-OK` się nie zgadza albo `is-active` nie wraca, przejść do
-§4 (rollback), nie powtarzać bloku ponownie.
+Stop: jeśli `FILES-OK` się nie zgadza albo `is-active` nie wraca, przejść do
+§4 (rollback), nie powtarzać bloku ponownie (§0 stop rule).
 
 ### Backupy istniejące na urządzeniu (zapisane, nie tworzyć ponownie)
 
-- `~/wifi-optimizer-recovery-20261017-1154` — backup pre-mutacyjny (w tym
-  kopie plików `/etc` w podkatalogu `etc/`).
+- `~/wifi-optimizer-recovery-20261017-1154` — backup pre-mutacyjny: `settings.json`,
+  `last_enforced`, 4 systemowe conf-y (NM/modprobe + REFONLY: valve/dispatcher),
+  2 wykazy `nmcli`; manifest `SHA256SUMS` zweryfikowany (`sha256sum -c`).
+  Układ płaski, bez podkatalogu `etc/` (wg S-PRE-02); przy najbliższym kontakcie
+  z urządzeniem potwierdzić odczytem `ls`, przy rozbieżności poprawić ten punkt
+  + §4.
 - `~/wifi-optimizer-recovery-20261017-1243` — refresh po testach; zawiera
   `system_snapshot.json` (tworzony przez poprawioną ścieżkę kodu).
 
