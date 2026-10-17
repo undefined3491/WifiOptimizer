@@ -876,24 +876,6 @@ function Content() {
     setCheckingUpdate(false);
   };
 
-  const handleChannelChange = async (nextChannel: string) => {
-    try {
-      const r = await backend.setUpdateChannel(nextChannel);
-      if (disposedRef.current) return;
-      if (r && !r.success) {
-        setUpdateError(r.message ?? "Couldn't change update channel.");
-      } else {
-        setUpdateError(null);
-      }
-    } catch {
-      if (disposedRef.current) return;
-      setUpdateError("Couldn't change update channel.");
-    }
-    if (disposedRef.current) return;
-    setUpdateInfo(null);
-    await refreshStatus();
-  };
-
   // Don't render content until first status arrives (prevents disconnect flash).
   // A failed first load renders an error with retry instead of hanging blank.
   if (!status) {
@@ -1334,12 +1316,10 @@ function Content() {
       />
 
       <UpdatesSection
-        channel={s?.update_channel ?? "stable"}
         updating={updating}
         checkingUpdate={checkingUpdate}
         updateInfo={updateInfo}
         updateError={updateError}
-        onChannelChange={handleChannelChange}
         onApply={handleApplyUpdate}
         onCheck={handleCheckForUpdate}
       />

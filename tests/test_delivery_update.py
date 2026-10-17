@@ -419,7 +419,12 @@ class DeliveryUpdateTests(unittest.IsolatedAsyncioTestCase):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
             and node.name in {"check_for_update", "apply_update"}
         )
-        assert "beta" not in update_source, "Stable updater must not reference beta"
+        # No beta branch reads/downloads, no channel plumbing — but the
+        # ex-beta version rule stays until the known field installation
+        # migrates (stored "beta" strips automatically via settings merge).
+        for marker in ("refs/heads/beta", "ref=beta", "update_channel", "set_update_channel"):
+            assert marker not in update_source, f"Stable updater must not contain {marker!r}"
+        assert '"-beta" in current' in update_source, "ex-beta version rule must be kept"
 
 
 if __name__ == "__main__":

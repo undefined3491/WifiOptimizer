@@ -170,7 +170,6 @@ DEFAULT_SETTINGS = {
     "priority_set": False,
     "distro_id": "unknown",
     "distro_name": "Unknown",
-    "update_channel": "stable",
     "last_applied": 0,
 }
 
@@ -3785,52 +3784,24 @@ class Plugin:
             decky.logger.error(f"reset_settings error: {e}")
             return self._unexpected_response(e)
 
-    # ---- Updates ----
-
-    async def set_update_channel(self, channel: str) -> dict:
-        """Set the update channel to 'stable' or 'beta'."""
-        try:
-            if channel not in ("stable", "beta"):
-                return {"success": False, "message": "Channel must be 'stable' or 'beta'"}
-            settings = _load_settings()
-            settings["update_channel"] = channel
-            _save_settings(settings)
-            decky.logger.info(f"Update channel set to {channel}")
-            return {"success": True, "channel": channel}
-        except Exception as e:
-            decky.logger.error(f"set_update_channel error: {e}")
-            return self._unexpected_response(e)
+    # ---- Updates (Stable-only; no Beta channel exists) ----
 
     async def check_for_update(self) -> dict:
-        """Check GitHub for a newer version (stable release or beta branch)."""
+        """Check GitHub for a newer Stable release (releases/latest)."""
         try:
             current = decky.DECKY_PLUGIN_VERSION
-            settings = _load_settings()
-            channel = settings.get("update_channel", "stable")
-            decky.logger.info(f"Update check: current={current}, channel={channel}")
+            decky.logger.info(f"Update check: current={current}, channel=stable")
 
-            if channel == "beta":
-                result = await asyncio.to_thread(
-                    self._run_cmd,
-                    [
-                        "/usr/bin/curl", "-sL", "--connect-timeout", "3", "--max-time", "10",
-                        "-H", "Accept: application/vnd.github.raw+json",
-                        "https://api.github.com/repos/undefined3491/wifi-optimizer-tms/contents/package.json?ref=beta",
-                    ],
-                    15,
-                    True,
-                )
-            else:
-                result = await asyncio.to_thread(
-                    self._run_cmd,
-                    [
-                        "/usr/bin/curl", "-sL", "--connect-timeout", "3", "--max-time", "10",
-                        "-H", "Accept: application/vnd.github.v3+json",
-                        "https://api.github.com/repos/undefined3491/wifi-optimizer-tms/releases/latest",
-                    ],
-                    15,
-                    True,
-                )
+            result = await asyncio.to_thread(
+                self._run_cmd,
+                [
+                    "/usr/bin/curl", "-sL", "--connect-timeout", "3", "--max-time", "10",
+                    "-H", "Accept: application/vnd.github.v3+json",
+                    "https://api.github.com/repos/undefined3491/wifi-optimizer-tms/releases/latest",
+                ],
+                15,
+                True,
+            )
 
             if not result["success"] or not result["stdout"]:
                 decky.logger.error(f"Update check: curl failed - rc={result.get('returncode')}, stderr={result.get('stderr', '')[:200]}")
@@ -3838,17 +3809,13 @@ class Plugin:
                     "success": False,
                     "current_version": current,
                     "update_available": False,
-                    "channel": channel,
                     "message": "Couldn't reach GitHub",
                 }
 
             data = json.loads(result["stdout"])
 
-            if channel == "beta":
-                latest = data.get("version", "")
-            else:
-                tag = data.get("tag_name", "")
-                latest = tag.lstrip("v")
+            tag = data.get("tag_name", "")
+            latest = tag.lstrip("v")
 
             if not latest:
                 msg = data.get("message", "couldn't parse version")
@@ -3857,31 +3824,28 @@ class Plugin:
                     "success": False,
                     "current_version": current,
                     "update_available": False,
-                    "channel": channel,
                     "message": msg,
                 }
 
-            # Beta: update if versions differ (allows downgrade back to stable)
-            # Stable: update only if newer (strip -beta suffix for comparison)
-            if channel == "beta":
-                update_available = latest != current
-            else:
-                current_clean = current.split("-")[0]
-                latest_clean = latest.split("-")[0]
-                current_tuple = tuple(int(x) for x in current_clean.split("."))
-                latest_tuple = tuple(int(x) for x in latest_clean.split("."))
-                update_available = latest_tuple > current_tuple or (
-                    "-beta" in current and latest_tuple >= current_tuple
-                )
+            # Stable: update only if newer. The "-beta" comparison is kept
+            # until the known beta-channel field installation migrates: an
+            # ex-beta build also updates to a Stable release of equal
+            # version.
+            current_clean = current.split("-")[0]
+            latest_clean = latest.split("-")[0]
+            current_tuple = tuple(int(x) for x in current_clean.split("."))
+            latest_tuple = tuple(int(x) for x in latest_clean.split("."))
+            update_available = latest_tuple > current_tuple or (
+                "-beta" in current and latest_tuple >= current_tuple
+            )
 
-            decky.logger.info(f"Update check: current={current}, latest={latest}, channel={channel}, update={update_available}")
+            decky.logger.info(f"Update check: current={current}, latest={latest}, channel=stable, update={update_available}")
 
             return {
                 "success": True,
                 "current_version": current,
                 "latest_version": latest,
                 "update_available": update_available,
-                "channel": channel,
             }
         except Exception as e:
             decky.logger.error(f"check_for_update error: {e}")
@@ -3893,25 +3857,19 @@ class Plugin:
             }
 
     async def apply_update(self) -> dict:
-        """Download and install update from the selected channel, then restart Decky."""
+        """Download and install the Stable update, then restart Decky."""
         try:
             info = await self.check_for_update()
             if not info.get("update_available"):
                 return {"success": False, "message": "No update available."}
 
-            channel = info.get("channel", "stable")
             latest = info["latest_version"]
             plugin_dir = decky.DECKY_PLUGIN_DIR
 
-            if channel == "beta":
-                download_url = "https://github.com/undefined3491/wifi-optimizer-tms/archive/refs/heads/beta.tar.gz"
-                src_dir = "wifi-optimizer-tms-beta"
-                label = f"beta v{latest}"
-            else:
-                tag = f"v{latest}"
-                download_url = f"https://github.com/undefined3491/wifi-optimizer-tms/archive/refs/tags/{tag}.tar.gz"
-                src_dir = f"wifi-optimizer-tms-{latest}"
-                label = f"v{latest}"
+            tag = f"v{latest}"
+            download_url = f"https://github.com/undefined3491/wifi-optimizer-tms/archive/refs/tags/{tag}.tar.gz"
+            src_dir = f"wifi-optimizer-tms-{latest}"
+            label = f"v{latest}"
 
             script = f"""#!/bin/bash
 sleep 2
@@ -3955,7 +3913,7 @@ systemctl restart plugin_loader 2>/dev/null || true
                 env=clean_env,
             )
 
-            decky.logger.info(f"Update to {label} initiated (channel={channel})")
+            decky.logger.info(f"Update to {label} initiated (channel=stable)")
             return {"success": True, "message": f"Updating to {label}..."}
         except Exception as e:
             decky.logger.error(f"apply_update error: {e}")
