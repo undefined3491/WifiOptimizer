@@ -4,6 +4,7 @@ import type {
   MethodResult,
   OptimizeSafeResult,
   UpdateCheckResult,
+  UpdateStartResult,
   BackendSwitchStartResult,
   BackendSwitchStatus,
 } from "./types";
@@ -22,9 +23,8 @@ export const reapplyAll = callable<[], OptimizeSafeResult>("reapply_all");
 export const repairDrifted = callable<[], OptimizeSafeResult>("repair_drifted");
 export const reapplyVolatile = callable<[], MethodResult>("reapply_volatile");
 export const resetSettings = callable<[], MethodResult>("reset_settings");
-export const setUpdateChannel = callable<[channel: string], MethodResult>("set_update_channel");
 export const checkForUpdate = callable<[], UpdateCheckResult>("check_for_update");
-export const applyUpdate = callable<[], MethodResult>("apply_update");
+export const applyUpdate = callable<[], UpdateStartResult>("apply_update");
 export const startBackendSwitch = callable<[backend: string], BackendSwitchStartResult>("start_backend_switch");
 export const getBackendSwitchStatus = callable<[], BackendSwitchStatus>("get_backend_switch_status");
 export const getDiagnosticInfo = callable<[], Record<string, unknown>>("get_diagnostic_info");

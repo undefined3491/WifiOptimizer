@@ -416,21 +416,27 @@ function Content() {
     }
   }, [status?.connected, runUpdateCheck]);
 
-  // Safety timeout: if an update was initiated but plugin_loader hasn't killed
-  // us within 60s, the detached update script probably failed (network drop,
-  // tarball corruption, etc.). Revert the UI so the user isn't stuck staring
-  // at "Updating..." forever, and surface a message they can act on.
+  // Safety timeout: if an update was accepted but plugin_loader hasn't
+  // killed us within 60s, the worker may have failed or the restart may
+  // have stalled. The outcome is unknown — never reported as success.
+  // Refresh first so a retry observes the job state (a still-running job
+  // answers the retry with an in_progress rejection), then release busy.
   useEffect(() => {
     if (!updating) return;
     const id = setTimeout(() => {
-      console.error("WiFi Optimizer TMS: update didn't complete within 60s");
-      setUpdating(false);
-      setUpdateError(
-        "Update didn't complete. Try again, or reinstall manually from Konsole."
-      );
+      console.error("WiFi Optimizer TMS: update status unknown after 60s");
+      (async () => {
+        await refreshStatus(true);
+        if (disposedRef.current) return;
+        setBusy(false);
+        setUpdating(false);
+        setUpdateError(
+          "Update status unknown — verify version after restart. If the version didn't change, retry the update."
+        );
+      })();
     }, UPDATE_TIMEOUT_MS);
     return () => clearTimeout(id);
-  }, [updating]);
+  }, [updating, refreshStatus]);
 
   // Periodic update re-check - QAM often caches the panel across close/reopen,
   // so the mount-effect check doesn't re-fire. This heartbeat catches new
@@ -833,27 +839,32 @@ function Content() {
 
   // Update-flow handlers, used by the top update banner and the Updates
   // section. Share the updating/updateError state so either surface can
-  // initiate a check or apply an update.
+  // initiate a check or apply an update. The backend accepts at most one
+  // job: a rejection (in_progress, switch_in_progress, no_update,
+  // no_release) means nothing launched, so the UI only reports it; an
+  // accept holds busy until the restart kills the connection or the
+  // safety timeout fires.
   const handleApplyUpdate = async () => {
+    if (busyRef.current) return;
     setUpdateError(null);
-    setUpdating(true);
     try {
       const r = await backend.applyUpdate();
       if (disposedRef.current) return;
-      if (r && !r.success) {
-        setUpdating(false);
-        setUpdateError(r.message ?? "Update failed. Please try again.");
+      if (!r || !r.accepted) {
+        setUpdateError(
+          r?.message ?? "Update couldn't start. Please try again."
+        );
+        await refreshStatus(true);
+        return;
       }
-      // On success plugin_loader restarts and kills the connection, which
-      // lands in the catch below; the safety-timeout effect covers a stall.
+      setBusy(true);
+      setUpdating(true);
     } catch {
-      // A genuine pre-launch failure surfaces here. A restart-kill after a
-      // successful launch clears when the panel reloads.
       if (disposedRef.current) return;
-      setUpdating(false);
       setUpdateError(
-        "Update failed. Try again, or reinstall manually from Konsole."
+        "Update failed to start. Try again, or reinstall manually from Konsole."
       );
+      await refreshStatus(true);
     }
   };
 
@@ -874,24 +885,6 @@ function Content() {
     }
     if (disposedRef.current) return;
     setCheckingUpdate(false);
-  };
-
-  const handleChannelChange = async (nextChannel: string) => {
-    try {
-      const r = await backend.setUpdateChannel(nextChannel);
-      if (disposedRef.current) return;
-      if (r && !r.success) {
-        setUpdateError(r.message ?? "Couldn't change update channel.");
-      } else {
-        setUpdateError(null);
-      }
-    } catch {
-      if (disposedRef.current) return;
-      setUpdateError("Couldn't change update channel.");
-    }
-    if (disposedRef.current) return;
-    setUpdateInfo(null);
-    await refreshStatus();
   };
 
   // Don't render content until first status arrives (prevents disconnect flash).
@@ -934,6 +927,12 @@ function Content() {
     backendSwitch?.error != null &&
     !backendSwitch?.in_progress &&
     !isBusy;
+  // Update/switch mutual exclusion (D7): Update Now is disabled while a
+  // backend switch is in flight or other work holds busy; the backend
+  // toggle is already disabled while updating via mutationLocked/isBusy,
+  // which handleApplyUpdate sets on an accepted start.
+  const updateApplyDisabled =
+    (backendSwitch?.in_progress ?? false) || isBusy;
 
   // Check if all safe optimizations are already active
   const allSafeActive =
@@ -971,7 +970,7 @@ function Content() {
       {updateInfo?.update_available && !updating && (
         <PanelSection>
           <PanelSectionRow>
-            <ButtonItem layout="below" onClick={handleApplyUpdate}>
+            <ButtonItem layout="below" disabled={updateApplyDisabled} onClick={handleApplyUpdate}>
               Update to v{updateInfo.latest_version}
             </ButtonItem>
           </PanelSectionRow>
@@ -1334,12 +1333,11 @@ function Content() {
       />
 
       <UpdatesSection
-        channel={s?.update_channel ?? "stable"}
         updating={updating}
         checkingUpdate={checkingUpdate}
         updateInfo={updateInfo}
         updateError={updateError}
-        onChannelChange={handleChannelChange}
+        applyDisabled={updateApplyDisabled}
         onApply={handleApplyUpdate}
         onCheck={handleCheckForUpdate}
       />

@@ -7,7 +7,7 @@ Decky plugin (Steam Deck / handhelds): React TS frontend + Python backend (runs 
 - The delivery workflow below is an agreed project decision. Follow it across sessions; do not replace it with direct pushes to `main`, automatic Stable publication on merge, or a different branching model without an explicit owner request. Report concrete conflicts or broken checks instead of silently changing the policy.
 - Work on `codex/<change>` branches, as required by the owner's latest instructions. Push the working branch, open a PR to `main`, complete review and the required `ci-required` check, then squash merge. A solo maintainer does not need an enforced approval from a second human; review still happens before merge.
 - Publishing is separate from merging. Bump the version when preparing a release: patch for fixes, minor for features. Documentation/CI-only changes do not require their own release. Stable publication requires a manual decision and a smoke test on a supported device, including reconnect and sleep/wake for networking changes.
-- Stable releases must use `v<package.json version>` and include rebuilt, tracked `dist` files in that exact tagged commit. Maintain `beta` only when pre-release testing is needed; the current Beta updater consumes a branch, not GitHub pre-release assets.
+- Stable releases must use `v<package.json version>` and include rebuilt, tracked `dist` files in that exact tagged commit. No 'beta' branch or channel is maintained; Stable-only distribution. The in-app updater consumes Stable GitHub releases only.
 - Operational instructions: [CONTRIBUTING.md](CONTRIBUTING.md). Design rationale and acceptance checks: [delivery workflow spec](docs/superpowers/specs/2026-10-15-delivery-workflow-design.md); execution detail: [rollout plan](docs/superpowers/plans/2026-10-15-delivery-workflow.md).
 - Delivery rollout record (2026-10-15): [PR #1](https://github.com/undefined3491/WifiOptimizer/pull/1) was squash merged into this fork's `main` as `e957c5b`; [main CI passed](https://github.com/undefined3491/WifiOptimizer/actions/runs/38754879160). Remote ruleset/settings activation remains separate: at the last read-back, rulesets were empty and squash-only/automatic branch deletion settings were unapplied. Verify actual GitHub settings before claiming enforcement.
 
@@ -33,7 +33,7 @@ Decky plugin (Steam Deck / handhelds): React TS frontend + Python backend (runs 
 ## Repository and updates
 
 - This fork's canonical repository is `https://github.com/undefined3491/wifi-optimizer-tms`. Installer downloads, in-app update checks/downloads, clone/install instructions, and bug-report links must point here. Keep upstream author credits and the BSD-3-Clause license intact.
-- Stable updates use this fork's latest published GitHub release, tagged `v<version>` with a matching `package.json` version. Beta updates read `package.json` and download the archive from this fork's `beta` branch. Both require the corresponding release/branch to exist; never fall back to the upstream repository.
+- Stable updates use this fork's latest published GitHub release, tagged 'v<version>' with a matching 'package.json' version. No Beta channel exists; never fall back to the upstream repository.
 - `install.sh` falls back to this fork's `main` branch if it cannot obtain a release tag. In-app update checks have no such fallback. Rebuild and include the tracked `dist/index.js` and `dist/index.js.map` before publishing a release or updating an installable branch.
 
 ## Commands

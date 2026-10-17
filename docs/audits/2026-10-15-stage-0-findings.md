@@ -101,7 +101,32 @@ The baseline report recorded **14 Important and 9 Minor findings**, with **no Cr
   and [plan](../superpowers/plans/2026-10-16-st0-ui-intent.md).
   Corrected-candidate device validation (including on-screen keyboard and
   gamepad-focus behavior) remains pending.
-- The other **3 Important and 1 Minor findings remain open**. Stage 0 and first Stable remain gated on their resolution/disposition and candidate-specific device evidence.
+- **ST0-001/002/003/018: corrected, isolated + review verification (this branch).**
+  Beta channel dropped (Stable-only updater + installer; stored `"beta"` migrates
+  automatically; ex-beta version rule kept). Single update job with phase machine
+  and cross-exclusion against backend switches (both directions); same-filesystem
+  sibling staging with dev gate; validated transfer (deadlines, `--fail`) and
+  identity (single root, name/version match, 7-file allowlist, parseable map);
+  per-file commit with version files last, no live-dir removal, mid-loop failure
+  withholds restart with partial counts and retained stage; boot re-offer on
+  missing shipped files. One restart, split `file_commit`/`restart`/`health:
+  load_unconfirmed` reporting, named error codes, 60 s UI timeout as unknown.
+  `install.sh` as validated rescue (staging, identity, no `rm -rf` of live,
+  atomic fresh/upgrade paths, truthful stdout/exit). UI mutual exclusion both
+  directions; delivery guards in `check_delivery.py` rewritten to the new
+  contract. Ten isolated tests (red→green) in `tests/test_delivery_update.py`;
+  full suite 132 tests OK (3 Windows inventory skips, Git Bash on PATH);
+  `tsc --skipLibCheck` and `pnpm run build` clean with rebuilt tracked `dist`.
+  Independent review + scoped re-review clean. See the [design](../superpowers/specs/2026-10-17-stable-delivery-design.md)
+  and [plan](../superpowers/plans/2026-10-17-stable-delivery.md).
+  Stage 0 code is complete; candidate device validation + release still required
+  (NOT Stage 0 closure). The two designed-out open questions (fixed-`/tmp`
+  updater script, updater shell interpolation) are gone with the detached
+  script; event-loop blocking, dispatcher races, and adapter coverage stay
+  explicitly open.
+- All 14 Important and 9 Minor findings are corrected in source with isolated
+  verification. Stage 0 stays open pending candidate device validation and the
+  first Stable release.
 
 ## Coverage and evidence
 
@@ -264,7 +289,7 @@ Additional primary references: [NetworkManager configuration precedence and back
 
 - **Privileged temporary script:** ordinary open/chmod on a fixed /tmp path (`main.py:1801-1808`) needs private exclusive creation. Local denial/overwrite/substitution depends on ownership, sticky-directory protections and kernel settings; no default-SteamOS privilege-escalation proof exists. Resolve through the update transaction design and isolated Linux security checks before Stable.
 - **Generated shell interpolation:** version and path values are inserted into shell text without shell escaping. Trusted repo metadata and configured install paths are the identified inputs, not an established unauthenticated attacker. Validate schemas/pass arguments and test unusual inert path fixtures; do not advertise a demonstrated remote exploit.
-- **Beta identity:** checking and downloading a moving beta branch are not pinned to one commit. Same-version branch publication is already prohibited, but movement between check and download remains a consistency question for the transaction redesign.
+- **Beta identity:** checking and downloading a moving beta branch are not pinned to one commit. Same-version branch publication is already prohibited, but movement between check and download remains a consistency question for the transaction redesign. [DROPPED with the Beta channel — no action.] The Beta channel no longer exists (no branch reads/downloads, no `update_channel` key); there is no moving branch to pin, so this question is moot. Stable candidates resolve through `releases/latest` → tag `vX.Y.Z` → tag tarball with identity validation before any live write.
 - **Event-loop blocking/backlog:** synchronous subprocess calls and a blocking sleep exist inside async APIs; interval requests have no in-flight dedupe. Accumulated command timeouts can delay progress/IPC. Exact Decky request-queue/timeout behavior and impact require controlled measurement; no fabricated permanent-deadlock claim.
 - **Dispatcher races/capability asymmetry:** a previously read enabled snapshot can race disable; runtime power/control is guarded by the link directory in the dispatcher but independently written by Python. Trace differences are real; material LCD/wake behavior is untested.
 - **Adapter/capability coverage:** interface and active UUID selection are independent, and driver-family 6-GHz flags do not identify exact cards. Multi-adapter, non-LCD, other-distribution and unsupported-driver scenarios remain unverified and need scoped claims/tests.
@@ -281,7 +306,7 @@ Rejected as separate findings: async declarations alone do not prove settings lo
 Scheduling update, 2026-10-16: ST0-010's entry race is corrected; initial device observation is recorded. The next recommended source package is ST0-005/006, independent of live deployment. Recovery remains a prerequisite for device mutation, not a reason to build the conditional updater proposal without evaluating Decky's native lifecycle.
 
 1. **ST0-005/006 — profile ownership and observational status.** Prepare a scoped plan before runtime edits. Define the owner UUID for BSSID/band/IPv6, transfer between profiles and legacy settings with unknown ownership. Status polling must neither save settings nor modify NM profiles/priority. Replace its implicit last-UUID bookkeeping with successful explicit-operation target recording where needed; preserve disconnected band/DNS/IPv6 changes. Do not silently move the undocumented priority `100` write into another automatic path. Tests must cover owner A with active B, disconnected disable, failed removal retaining ownership, transfer/unknown legacy state and polling B without writes. Removing only status mutations does not fully resolve either finding or establish restoration correctness.
-2. **Restoration and delivery — ST0-004/016 and 001/002/003/018.** Agree ownership/restoration of existing modified state, then compare native Decky replacement with the retained-self-updater proposal before selecting an installation transaction design. Add isolated copy/interruption/exclusion and truthful restart-result tests before live update/reset/uninstall tests. The [recovery specification](../superpowers/specs/2026-10-15-delivery-recovery-design.md) is a conditional proposal, not an implemented dependency.
+2. **Restoration and delivery — ST0-004/016 and 001/002/003/018.** Agree ownership/restoration of existing modified state, then harden the retained Stable-only in-app updater (single job with exclusion, same-filesystem staging, validated transfer/identity, per-file commit, truthful restart/result reporting) plus the rescue-only installer. Add isolated copy/interruption/exclusion and truthful restart-result tests before live update/reset/uninstall tests. The [recovery specification](../superpowers/specs/2026-10-15-delivery-recovery-design.md) is a conditional proposal, not an implemented dependency. Update 2026-10-17: delivery direction decided — A1 deferred, custom Stable-only updater retained + hardened, Beta dropped; item 2 rewritten accordingly.
 3. **Remaining behavior and UI.** Correct reconnect outcomes and truthful mutation results (007/008), effective backend state/recovery (009), UI intent/result handling (011-020), band/CAKE claims and dependency triage (021-023). ST0-010 does not establish correctness of real workers, thread cancellation or exclusion with updates. Some independent UI fixes can proceed once their backend result contracts are agreed.
 4. **Candidate validation and release.** Reuse the [existing-device inventory](../testing/results/2026-10-16-owner-device-inventory.md); refresh observations affected by later system changes. Prepare private recoverable configuration and repeatable AP/workload/power conditions, then execute the [device protocol](../testing/steam-deck-lcd-stable.md) against an exact corrected candidate. Record untested configurations and explicit lower-priority dispositions. Stable and Connection Watchdog follow Stage 0 closure.
 

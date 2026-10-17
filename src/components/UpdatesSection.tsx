@@ -1,47 +1,32 @@
-import { PanelSection, PanelSectionRow, ButtonItem, DropdownItem } from "@decky/ui";
+import { PanelSection, PanelSectionRow, ButtonItem } from "@decky/ui";
 import type { UpdateCheckResult } from "../types";
 import { theme } from "../theme";
 
 interface UpdatesSectionProps {
-  channel: string;
   updating: boolean;
   checkingUpdate: boolean;
   updateInfo: UpdateCheckResult | null;
   updateError: string | null;
-  onChannelChange: (channel: string) => void;
+  applyDisabled: boolean;
   onApply: () => void;
   onCheck: () => void;
 }
 
-const CHANNEL_OPTIONS = [
-  { data: "stable", label: "Stable" },
-  { data: "beta", label: "Beta" },
-];
-
-// The Updates panel section: channel selector, optional warning text for a
+// The Updates panel section: optional warning text for a
 // stuck / failed update, and a button that context-switches between
 // "Updating...", "Update Now", "Up to date", and "Check for Updates"
 // depending on state.
 export function UpdatesSection({
-  channel,
   updating,
   checkingUpdate,
   updateInfo,
   updateError,
-  onChannelChange,
+  applyDisabled,
   onApply,
   onCheck,
 }: UpdatesSectionProps) {
   return (
     <PanelSection title="Updates">
-      <PanelSectionRow>
-        <DropdownItem
-          label="Update channel"
-          rgOptions={CHANNEL_OPTIONS}
-          selectedOption={channel}
-          onChange={(option: { data: string }) => onChannelChange(option.data)}
-        />
-      </PanelSectionRow>
       {updateError && !updating && (
         <PanelSectionRow>
           <div style={{ fontSize: theme.fontSize.body, color: theme.warning.text }}>
@@ -63,7 +48,7 @@ export function UpdatesSection({
             </div>
           </PanelSectionRow>
           <PanelSectionRow>
-            <ButtonItem layout="below" onClick={onApply}>
+            <ButtonItem layout="below" disabled={applyDisabled} onClick={onApply}>
               Update Now
             </ButtonItem>
           </PanelSectionRow>

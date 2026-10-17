@@ -28,7 +28,7 @@ The observed `plugin_loader` kill mode is evidence for this installation only. I
 
 ## Installed plugin identity
 
-Only the legacy `WiFi Optimizer` candidate directory was found. Its manifest reports `WiFi Optimizer`, package `wifi-optimizer`, version `0.11.6`; neither TMS candidate directory was present. Stored plugin update channel is `beta`, independently of the SteamOS Stable channel.
+Only the legacy `WiFi Optimizer` candidate directory was found. Its manifest reports `WiFi Optimizer`, package `wifi-optimizer`, version `0.11.6`; neither TMS candidate directory was present. Stored plugin update channel is `beta`, independently of the SteamOS Stable channel. This is a pre-decision observation; the Beta channel is dropped and 'update_channel' is to be removed, with existing 'beta' values migrated to Stable.
 
 All six collected product-file hashes exactly match Git blobs at pre-fork-fixes commit `8308d18c42637b76a39353e70c1d86f3fa6ae4bc` (`e957c5b^`): `plugin.json`, `package.json`, `main.py`, `dist/index.js`, `dist/index.js.map`, and `defaults/dispatcher.sh.tmpl`. At audited fork product baseline `e957c5b`, the manifest, package and template still match, while the backend and both bundle files differ. This establishes equality of those observed files; it does not prove the installation's source commit, authenticity, other files or running in-memory code. The fork's corrected update URLs have not been validated on this device.
 

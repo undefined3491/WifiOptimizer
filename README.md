@@ -30,7 +30,7 @@ Switch back to Game Mode. Open the Quick Access Menu (**...** button) > Decky > 
 
 **Updating:** The plugin checks for updates automatically when you open it. If an update is available, an update button appears at the top of the panel - tap it and the plugin updates and restarts itself. You can also update manually by running the install command above again.
 
-Installation and updates use this fork. The installer falls back to its `main` branch when no release is available. In-app Stable updates require a published GitHub release with a `v<version>` tag; Beta updates require a `beta` branch with a version in `package.json`. The command above describes the existing installer; it is not a validated migration or recovery procedure for Stage 0.
+Installation and updates use this fork. The installer falls back to its `main` branch when no release is available. In-app Stable updates require a published GitHub release with a `v<version>` tag. There is no Beta channel. The command above describes the existing installer; it is not a validated migration or recovery procedure for Stage 0.
 
 > **Note:** If you're on a version before v0.6.6, the in-app updater had bugs. Please update manually using the install command above to get working auto-updates.
 

@@ -274,40 +274,220 @@ def verify_dist(root: Path, snapshot: Path) -> None:
         raise ValueError("rebuilt dist/index.js.map differs from the committed snapshot")
 
 
-def _render_update_fstring(tree: ast.Module) -> str:
-    functions = [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "apply_update"]
-    if len(functions) != 1:
-        raise ValueError("main.py must define exactly one apply_update method")
-    assignments = [node for node in ast.walk(functions[0]) if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "script" for target in node.targets)]
-    if len(assignments) != 1 or not isinstance(assignments[0].value, ast.JoinedStr):
-        raise ValueError("apply_update must assign its generated script as the known f-string")
-    pieces = []
-    for value in assignments[0].value.values:
-        if isinstance(value, ast.Constant) and isinstance(value.value, str):
-            pieces.append(value.value)
-        elif isinstance(value, ast.FormattedValue):
-            if value.conversion != -1:
-                raise ValueError("unsupported conversion in generated update script f-string")
-            if value.format_spec is not None:
-                raise ValueError("unsupported format specifier in generated update script f-string")
-            # All interpolation points are replaced with inert shell-safe text.
-            pieces.append("fixture")
-        else:
-            raise ValueError("unsupported expression in generated update script")
-    return "".join(pieces)
-
-
-def _bash_check(path: Path, content: str | None = None) -> None:
+def _bash_check(path: Path) -> None:
     bash = shutil.which("bash")
     if not bash:
         raise ValueError("bash is required for shell syntax validation")
-    if content is None:
-        command = [bash, "-n", str(path)]
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
-    else:
-        result = subprocess.run([bash, "-n"], input=content, capture_output=True, text=True, check=False)
+    command = [bash, "-n", str(path)]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode:
         raise ValueError(f"bash syntax error in {path}: {(result.stderr or result.stdout).strip()}")
+
+
+UPDATER_METHODS = ("apply_update", "_update_worker", "check_for_update", "_ensure_update_job_state")
+UPDATE_COMMIT_ORDER = (
+    "defaults/dispatcher.sh.tmpl",
+    "decky.pyi",
+    "dist/index.js",
+    "dist/index.js.map",
+    "main.py",
+    "package.json",
+    "plugin.json",
+)
+REQUIRED_CURL_FLAGS = (
+    "-fsSL", "--proto", "=https", "--connect-timeout", "5", "--max-time",
+    "60", "--max-filesize", "50M", "--retry", "0", "--fail",
+)
+REQUIRED_UPDATE_ERRORS = (
+    "resolve_failed", "download_failed", "archive_invalid", "identity_mismatch",
+    "stage_failed", "commit_failed", "restart_failed",
+)
+REQUIRED_UPDATE_PHASES = (
+    "idle", "resolving", "downloading", "validating", "committing",
+    "restart_requested", "failed", "done_unknown",
+)
+REQUIRED_UPDATE_REASONS = (
+    "in_progress", "switch_in_progress", "update_in_progress", "no_update", "no_release",
+)
+# Markers of the retired detached-script mechanism. The staged updater runs
+# in-worker via _run_cmd; no generated script, no fixed /tmp path, no
+# detached copy process.
+RETIRED_SCRIPT_MARKERS = (
+    "/tmp/wifi-optimizer-update.sh", "Popen", "start_new_session", "DEVNULL",
+)
+
+
+def _updater_tree(root: Path) -> tuple[str, ast.Module, dict[str, Any]]:
+    try:
+        text = (root / "main.py").read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"cannot read main.py: {exc}") from exc
+    try:
+        tree = ast.parse(text, filename="main.py")
+    except SyntaxError as exc:
+        raise ValueError(f"Python syntax validation failed for main.py: {exc}") from exc
+    plugin = next(
+        (node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "Plugin"),
+        None,
+    )
+    if plugin is None:
+        raise ValueError("main.py must define the Plugin class")
+    methods = {
+        node.name: node
+        for node in plugin.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    return text, tree, methods
+
+
+def _check_updater_constants(tree: ast.Module) -> None:
+    found: dict[str, Any] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            name = node.targets[0].id
+            if name in {"_UPDATE_COMMIT_ORDER", "_UPDATE_CURL_TIMEOUT"}:
+                try:
+                    found[name] = ast.literal_eval(node.value)
+                except (ValueError, SyntaxError):
+                    raise ValueError(f"updater constant {name} must be a literal")
+    if list(found.get("_UPDATE_COMMIT_ORDER") or []) != list(UPDATE_COMMIT_ORDER):
+        raise ValueError("updater commit order must be the fixed allowlist order with version files last")
+    timeout = found.get("_UPDATE_CURL_TIMEOUT")
+    if not isinstance(timeout, int) or timeout < 60:
+        raise ValueError("updater curl timeout must cover the 60 s transfer bound")
+
+
+def _check_no_detached_script(sources: dict[str, str]) -> None:
+    for name in ("apply_update", "_update_worker"):
+        for marker in RETIRED_SCRIPT_MARKERS:
+            if marker in sources[name]:
+                raise ValueError(f"updater {name} must not use a detached script ({marker})")
+
+
+def _check_curl_transfer(worker: str) -> None:
+    for flag in REQUIRED_CURL_FLAGS:
+        if flag not in worker:
+            raise ValueError(f"updater curl transfer must include {flag!r}")
+    if "download_failed" not in worker:
+        raise ValueError("updater must report checked curl results as download_failed")
+
+
+def _run_cmd_calls(node: Any) -> list:
+    # Shell-outs go through asyncio.to_thread(self._run_cmd, cmd, timeout,
+    # clean_env): _run_cmd is passed as a callback, not called directly.
+    return [
+        call
+        for call in ast.walk(node)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "to_thread"
+        and any(isinstance(arg, ast.Attribute) and arg.attr == "_run_cmd" for arg in call.args)
+    ]
+
+
+def _check_clean_env(nodes: dict[str, Any]) -> None:
+    for name in ("check_for_update", "_update_worker"):
+        calls = _run_cmd_calls(nodes[name])
+        if not calls:
+            raise ValueError(f"updater {name} must shell out via _run_cmd")
+        for call in calls:
+            if not call.args or not isinstance(call.args[-1], ast.Constant) or call.args[-1].value is not True:
+                raise ValueError(f"updater {name} must pass clean_env=True to _run_cmd")
+
+
+def _check_commit_loop(worker_node: Any) -> None:
+    loops = [
+        node
+        for node in ast.walk(worker_node)
+        if isinstance(node, ast.For)
+        and isinstance(node.iter, ast.Name)
+        and node.iter.id == "_UPDATE_COMMIT_ORDER"
+    ]
+    if not loops:
+        raise ValueError("updater must commit by iterating _UPDATE_COMMIT_ORDER")
+    loop_replaces = {
+        id(call)
+        for loop in loops
+        for call in ast.walk(loop)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "replace"
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == "os"
+    }
+    if not loop_replaces:
+        raise ValueError("updater commit loop must apply each file with os.replace")
+    all_replaces = {
+        id(call)
+        for call in ast.walk(worker_node)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "replace"
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == "os"
+    }
+    if all_replaces != loop_replaces:
+        raise ValueError("updater must only write live files via the ordered os.replace loop")
+
+
+def _check_no_live_dir_removal(worker_node: Any) -> None:
+    for call in ast.walk(worker_node):
+        if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute):
+            continue
+        target = call.func.value
+        name = call.func.attr
+        if isinstance(target, ast.Name) and target.id == "os" and name in {"unlink", "remove", "rename", "rmdir"}:
+            raise ValueError(f"updater must never remove or rename via os.{name}")
+        if isinstance(target, ast.Name) and target.id == "shutil" and name == "rmtree":
+            if not call.args or not isinstance(call.args[0], ast.Name) or call.args[0].id != "stage_dir":
+                raise ValueError("updater must only ever remove the stage dir")
+
+
+def _check_vocabulary(combined: str) -> None:
+    for code in REQUIRED_UPDATE_ERRORS:
+        if code not in combined:
+            raise ValueError(f"updater must report error code {code}")
+    for phase in REQUIRED_UPDATE_PHASES:
+        if phase not in combined:
+            raise ValueError(f"updater must use job phase {phase}")
+    for reason in REQUIRED_UPDATE_REASONS:
+        if reason not in combined:
+            raise ValueError(f"updater must use start reason {reason}")
+
+
+def check_updater_contract(root: Path) -> None:
+    """Validate the staged single-job Stable updater against D2-D5.
+
+    Static half of the contract: no detached script, validated curl
+    transfer with clean_env, fixed-order per-file os.replace commit, no
+    live-dir removal, and the phase/reason/error vocabulary. Behavior is
+    proven by tests/test_delivery_update.py fixtures.
+    """
+    text, tree, methods = _updater_tree(root)
+    missing = [name for name in UPDATER_METHODS if name not in methods]
+    if missing:
+        raise ValueError(f"main.py Plugin is missing updater methods: {', '.join(missing)}")
+    sources = {name: ast.get_source_segment(text, methods[name]) or "" for name in UPDATER_METHODS}
+    plugin_source = next(
+        (
+            ast.get_source_segment(text, node)
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "Plugin"
+        ),
+        "",
+    ) or ""
+    if "update_in_progress" not in plugin_source:
+        raise ValueError("backend switch must cross-reject on update_in_progress")
+    _check_updater_constants(tree)
+    _check_no_detached_script(sources)
+    _check_curl_transfer(sources["_update_worker"])
+    _check_clean_env(methods)
+    _check_commit_loop(methods["_update_worker"])
+    _check_no_live_dir_removal(methods["_update_worker"])
+    if "start_backend_switch" in methods:
+        sources["start_backend_switch"] = ast.get_source_segment(text, methods["start_backend_switch"]) or ""
+    combined = "\n".join(sources.values())
+    _check_vocabulary(combined)
 
 
 def check_python_and_shell(root: Path) -> None:
@@ -319,8 +499,7 @@ def check_python_and_shell(root: Path) -> None:
             parsed[relative] = ast.parse(text, filename=relative)
         except (OSError, UnicodeError, SyntaxError) as exc:
             raise ValueError(f"Python syntax validation failed for {relative}: {exc}") from exc
-    script = _render_update_fstring(parsed["main.py"])
-    _bash_check(root / "main.py: apply_update generated script", script)
+    check_updater_contract(root)
     for relative in ("install.sh", "defaults/dispatcher.sh.tmpl"):
         path = root / relative
         if not path.is_file():

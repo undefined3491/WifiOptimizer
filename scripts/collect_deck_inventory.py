@@ -24,7 +24,7 @@ PROFILE_FIELDS = 'connection.autoconnect,connection.autoconnect-priority,802-11-
 UNITS = ('NetworkManager.service', 'iwd.service', 'wpa_supplicant.service', 'plugin_loader.service')
 PROPERTIES = 'LoadState,ActiveState,SubState,UnitFileState,KillMode'
 FLAGS = ('supports_6ghz', 'power_save_disabled', 'auto_fix_on_wake', 'bssid_lock_enabled', 'band_preference_enabled', 'dns_enabled', 'ipv6_disabled', 'buffer_tuning_enabled', 'cake_enabled', 'priority_set')
-ENUMS = {'band_preference': ('', 'a', 'bg'), 'dns_provider': ('cloudflare', 'google', 'quad9', 'custom'), 'update_channel': ('stable', 'beta')}
+ENUMS = {'band_preference': ('', 'a', 'bg'), 'dns_provider': ('cloudflare', 'google', 'quad9', 'custom')}
 SYSCTLS = ('net.core.rmem_max', 'net.core.wmem_max', 'net.core.rmem_default', 'net.core.wmem_default', 'net.core.netdev_max_backlog', 'net.core.netdev_budget', 'net.core.netdev_budget_usecs', 'net.ipv4.tcp_slow_start_after_idle')
 CONFIGS = ('/etc/NetworkManager/dispatcher.d/99-wifi-optimizer', '/etc/NetworkManager/conf.d/99-wifi-optimizer.conf', '/etc/NetworkManager/conf.d/99-wifi-optimizer-backend.conf', '/etc/NetworkManager/conf.d/99-valve-wifi-backend.conf', '/usr/lib/NetworkManager/conf.d/10-steamos-defaults.conf', '/etc/NetworkManager/conf.d/iwd.conf', '/etc/modprobe.d/99-wifi-optimizer.conf')
 
@@ -140,6 +140,14 @@ def json_file(path, root):
 def settings_view(value):
     result = {key: value[key] for key in FLAGS if type(value.get(key)) is bool}
     result.update({key: value[key] for key, choices in ENUMS.items() if isinstance(value.get(key), str) and value[key] in choices})
+    # No Beta channel exists; the key is gone from DEFAULT_SETTINGS. A stored
+    # pre-decision "beta" value is still recorded raw (never silently dropped
+    # while the field installation exists) with a migration note.
+    channel = value.get('update_channel')
+    if isinstance(channel, str):
+        result['update_channel'] = channel
+        if channel == 'beta':
+            result['update_channel_note'] = 'beta channel dropped; migrated to Stable'
     return result
 
 
