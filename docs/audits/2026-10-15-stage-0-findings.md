@@ -127,6 +127,13 @@ The baseline report recorded **14 Important and 9 Minor findings**, with **no Cr
 - All 14 Important and 9 Minor findings are corrected in source with isolated
   verification. Stage 0 stays open pending candidate device validation and the
   first Stable release.
+- **Validation note 2026-10-17.** Device validation of the corrected code has
+  started against deploys `a3bb26b` then `5d48ded`; per-item results are
+  recorded in the validation matrix on the unmerged session branch
+  `origin/codex/st0-validation-run` (HEAD `35062e9`) and will be merged into
+  `main` as a single session PR after re-validation. The failures seen there
+  motivated the device-discovered section below. Current validation target:
+  [`9a2cb96`](../testing/results/2026-10-17-candidate-9a2cb96.md).
 
 ## Device-discovered defects 2026-10-17 (non-ST0, Stage 0 open)
 
@@ -333,6 +340,18 @@ Rejected as separate findings: async declarations alone do not prove settings lo
 ## Correction order and Stage 0 handoff
 
 Scheduling update, 2026-10-16: ST0-010's entry race is corrected; initial device observation is recorded. The next recommended source package is ST0-005/006, independent of live deployment. Recovery remains a prerequisite for device mutation, not a reason to build the conditional updater proposal without evaluating Decky's native lifecycle.
+
+Scheduling update, 2026-10-17: items 1–3 below are code-complete (full chain:
+PRs #6–#12, #14, #17, #18; every numbered finding plus the device-discovered
+S-BE-04/05/06 and S-OPT-02). Device validation started against `a3bb26b`/`5d48ded`
+and must be repeated on the current candidate [`9a2cb96`](../testing/results/2026-10-17-candidate-9a2cb96.md)
+per its re-validation checklist; the session branch `codex/st0-validation-run`
+carries the evidence rows and is merged as one PR after re-validation. After
+re-validation and before the Stable decision sits the owner-approved
+**DNS-removal package (G)**: remove custom
+DNS entirely (backend + UI + settings + tests + docs), isolated-test-first, on
+its own `codex/<change>` branch. Order: re-validation → package G → Stable;
+no version bump, tag or Watchdog work until Stage 0 closes.
 
 1. **ST0-005/006 — profile ownership and observational status.** Prepare a scoped plan before runtime edits. Define the owner UUID for BSSID/band/IPv6, transfer between profiles and legacy settings with unknown ownership. Status polling must neither save settings nor modify NM profiles/priority. Replace its implicit last-UUID bookkeeping with successful explicit-operation target recording where needed; preserve disconnected band/DNS/IPv6 changes. Do not silently move the undocumented priority `100` write into another automatic path. Tests must cover owner A with active B, disconnected disable, failed removal retaining ownership, transfer/unknown legacy state and polling B without writes. Removing only status mutations does not fully resolve either finding or establish restoration correctness.
 2. **Restoration and delivery — ST0-004/016 and 001/002/003/018.** Agree ownership/restoration of existing modified state, then harden the retained Stable-only in-app updater (single job with exclusion, same-filesystem staging, validated transfer/identity, per-file commit, truthful restart/result reporting) plus the rescue-only installer. Add isolated copy/interruption/exclusion and truthful restart-result tests before live update/reset/uninstall tests. The [recovery specification](../superpowers/specs/2026-10-15-delivery-recovery-design.md) is a conditional proposal, not an implemented dependency. Update 2026-10-17: delivery direction decided — A1 deferred, custom Stable-only updater retained + hardened, Beta dropped; item 2 rewritten accordingly.

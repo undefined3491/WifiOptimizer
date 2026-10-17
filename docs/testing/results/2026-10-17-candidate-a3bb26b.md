@@ -1,8 +1,19 @@
 # Candidate record — `a3bb26b` (2026-10-17)
 
-Status: **PENDING** — code-complete, **device validation not started**.
+Status: **partially executed on device 2026-10-17; superseded as the
+validation target by [`9a2cb96`](2026-10-17-candidate-9a2cb96.md)**.
 Stage 0 remains **open**. This file is a DOCS-ONLY validation-prep record.
 No version bump, no tag, no release publication implied.
+
+> Device note (2026-10-17): validation of the corrected code did **not**
+> run against this exact commit alone — deploys were `a3bb26b` and then
+> `5d48ded` (the latter adds PR #17, which is not part of this candidate).
+> Rows live on the unmerged session branch `origin/codex/st0-validation-run`
+> (matrix `2026-10-17-candidate-validation-matrix.md`). On-device failures
+> found there (backend switch, persistent banner, `l0s_aspm`, poisoned-env
+> reads) led to PRs #17/#18; the §5 scope and §7 TO-FILL items here carry
+> forward to `9a2cb96`, while dedicated re-testing of this commit is not
+> planned.
 
 ## 1. Candidate identity
 

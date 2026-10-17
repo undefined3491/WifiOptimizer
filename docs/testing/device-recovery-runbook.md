@@ -204,7 +204,7 @@ Dopiero po zielonej weryfikacji wolno (za osobną zgodą) wykonywać scenariusze
 
 Red flags — którykolwiek oznacza natychmiastowy stop testów i rollback (nie „jeszcze jeden reconnect"):
 
-- Brak WiFi po deplo deployment/Resecie (profil nie wraca, `nmcli` pokazuje rozłączenie mimo prób `con up`).
+- Brak WiFi po deployu albo po Resecie (profil nie wraca, `nmcli` pokazuje rozłączenie mimo prób `con up`).
 - Loader nie wraca do `active` po restarcie (oba ścieżki §3).
 - Wersja/hash po starcie niezgodne z kandydatem (`load_unconfirmed`).
 - Błędy `errors[]` / `fallback:*` w wynikach operacji restore/reset (snapshot slot missing — fallback na assumed defaults, nie na stan sprzed sesji).
@@ -255,6 +255,81 @@ Uwaga o plikach, których ten rollback **nie odtwarza automatycznie**: stan usł
 8. **Powtarzanie mutacji po nieznanym stanie.** Timeout/utrata połączenia w trakcie zapisu = stan nieznany → §4, nie retry tego samego zapisu.
 9. **Traktowanie ZIP-reinstall jako pristine baseline.** Natywny replace w Decky 3.2.10 może wywołać `_uninstall()` z obecnymi niebezpiecznymi założeniami; reinstall nie dowodzi bezpiecznego update ani nie czyści historii systemowej.
 10. **Odtwarzanie cudzych profili z backupu.** Przywracamy wyłącznie pliki własne wtyczki i własne settings; profili sąsiadów / nie-własnych kluczy nie dotykamy (owned-only).
+
+## 6. SSH transport i owner-sudo (wiedza sesyjna 2026-10-17)
+
+Ustalenia z sesji walidacyjnych 2026-10-17, obowiązujące dopóki urządzenie/wirtualka nie ulegnie zmianie. Nie obejmują autoryzacji mutacji (§0) — opisują tylko **jak** wykonywać czynności read-only i przekazywać ownerowi kroki sudo.
+
+### Transport SSH (agent → Deck, read-only)
+
+- Klucz publiczny dla sesji agenta: `$env:TEMP\steamdeck-id.pub` na PC operatora
+  (eksport klucza lokalnego agenta: `ssh-add -L` → zapis do pliku `.pub`).
+  Plik jest sesyjny — przy nowej sesji wyeksportować ponownie. Prywatny klucz
+  nigdy nie jest commitowany ani wysyłany na urządzenie.
+- Szablon każdej komendy read-only:
+
+  ```
+  ssh -o BatchMode=yes -o ConnectTimeout=30 -o IdentitiesOnly=yes -i $env:TEMP\steamdeck-id.pub deck@steamdeck '<cmd>'
+  ```
+
+- `IdentitiesOnly=yes` jest **osobną regułą**: przy ≥6 kluczach w agencie SSH
+  odrzuca logowanie "Too many authentication failures" bez tego przełącznika.
+- Host `steamdeck` rozwiązuje się na PC operatora (DNS/hosts); `sshd` na Decku
+  włącza owner w Panelu sterowania na życzenie.
+- Złożone komendy i bloki skryptowe: **nie cytować inline przez PowerShell**
+  (PowerShell zniekształca cudzysłowy i `$`). Wykonać: zapis do pliku →
+  `scp` na Deck (`/tmp/<script>.sh`) → `ssh … 'bash /tmp/<script>.sh'`.
+  Pliki tymczasowe na PC operatora trzymać w `$env:TEMP\opencode\`.
+
+### Sudo — podział ról
+
+- `sudo -v` wpisane w Konsole na Decku **nie upoważnia sesji SSH** (tty
+  tickets). Hasło właściciela jest wpisowane wyłącznie przez ownera; nigdy nie
+  jest przesyłane agentowi.
+- Każde mutujące wywołanie sudo wykonuje **właściciel** w Konsole, z bloku komend
+  przygotowanego przez agenta (wzory: §1 krok 1.1, §2 backup, §3 deploy).
+  Agent po stronie SSH może zweryfikować wynik read-only (`systemctl
+  is-active plugin_loader`, `ls -l`, `sha256sum -c`, `cat` plików w
+  `$BACKUP_DIR`), ale nie uruchamia `sudo`.
+- Bloki sudo ownera są tak skonstruowane, aby porażka była widoczna: `set -e`,
+  `sha256sum -c` jako bramka przed `cp`, `is-active` na końcu. Porażka bloku =
+  stan **nieznany**, nie sukces (§0 stop rule).
+
+### Deploy kandydata — ustalona praktyka (ścieżka B, staging)
+
+Do czasu pierwszej publikacji na GitHubie `install.sh` nie ma przypiętego
+artefaktu kandydata: spada wtedy na gałąź `main` (AGENTS.md), która nie jest
+immutabilnym kandydatem — dlatego deploy kandydata robi się stagingiem
+(poniżej), nie `install.sh`. Stosowana procedura:
+
+1. Agent buduje kandydata lokalnie (Git Bash/CMD: `pnpm install --frozen-lockfile`,
+   `pnpm run build` dla każdego wdrożenia pakietu) i przygotowuje katalog
+   staging na PC oraz zestaw plików: `plugin.json`, `package.json`,
+   `main.py`, `decky.pyi`, `dist/index.js`, `dist/index.js.map`,
+   `defaults/dispatcher.sh.tmpl`.
+2. Agent wgrywa staging na Deck (`scp` do `~/candidate-stage<NN>`) i zdalnie
+   wypisuje listę `sha256sum` plików; owner w Konsole uruchamia blok: `sudo cp -p`
+   wymienionych plików do `$PLUGIN_DIR` (utworzyć
+   katalogi), `sha256sum -c` **FILES-OK** w stagingu vs `$PLUGIN_DIR`,
+   `sudo systemctl restart plugin_loader`,
+   `systemctl is-active plugin_loader`.
+
+Stop: jeśli `FILES-OK` się nie zgadza albo `is-active` nie wraca, przejść do
+§4 (rollback), nie powtarzać bloku ponownie (§0 stop rule).
+
+### Backupy istniejące na urządzeniu (zapisane, nie tworzyć ponownie)
+
+- `~/wifi-optimizer-recovery-20261017-1154` — backup pre-mutacyjny: `settings.json`,
+  `last_enforced`, 4 systemowe conf-y (NM/modprobe + REFONLY: valve/dispatcher),
+  2 wykazy `nmcli`; manifest `SHA256SUMS` zweryfikowany (`sha256sum -c`).
+  Układ płaski, bez podkatalogu `etc/` (wg S-PRE-02); przy najbliższym kontakcie
+  z urządzeniem potwierdzić odczytem `ls`, przy rozbieżności poprawić ten punkt
+  + §4.
+- `~/wifi-optimizer-recovery-20261017-1243` — refresh po testach; zawiera
+  `system_snapshot.json` (tworzony przez poprawioną ścieżkę kodu).
+
+Zmiana ustawień/systemu bez ich ochrony jest §0-naruszeniem; przy
+odtwarzaniu z backupu, aktualizować datowane wpisy w matrycy walidacyjnej.
 
 ## Załącznik: minimalna ściąga komend (sukces vs stop)
 
