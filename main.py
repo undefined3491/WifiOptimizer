@@ -268,7 +268,7 @@ class Plugin:
 
     # ---- Helpers ----
 
-    def _run_cmd(self, cmd: list[str], timeout: int = 5, clean_env: bool = False) -> dict:
+    def _run_cmd(self, cmd: list[str], timeout: int = 5, clean_env: bool = True) -> dict:
         """Run a subprocess and return a result dict.
 
         clean_env strips LD_LIBRARY_PATH so children use system libraries

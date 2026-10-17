@@ -14,11 +14,19 @@ wrappers), and the direct call-site count must match the audit (61).
 """
 
 import ast
+import re
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
 SOURCE = Path(__file__).resolve().parents[1] / "main.py"
+
+AUDIT = (
+    Path(__file__).resolve().parents[1]
+    / "docs"
+    / "audits"
+    / "2026-10-17-clean-env-audit.md"
+)
 
 EXPECTED_DIRECT_CALL_SITES = 61
 
@@ -142,14 +150,28 @@ def _false_opt_outs(tree):
     return found
 
 
-def _direct_call_count(tree):
-    return sum(
-        1
+def _direct_call_lines(tree):
+    return {
+        node.lineno
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "_run_cmd"
-    )
+    }
+
+
+def _direct_call_count(tree):
+    return len(_direct_call_lines(tree))
+
+
+def _audit_direct_lines():
+    section = AUDIT.read_text(encoding="utf-8").split(
+        "## Direct call sites (61)", 1
+    )[1].split("## ", 1)[0]
+    return {
+        int(m.group(1))
+        for m in re.finditer(r"^-\s+`main\.py:(\d+)`", section, re.MULTILINE)
+    }
 
 
 def _parse_main():
@@ -221,9 +243,9 @@ class CleanEnvTests(unittest.TestCase):
         self.assertEqual(_false_opt_outs(_parse_main()), [])
 
     def test_call_site_count_matches_audit(self):
-        # Task 2 adds the audit-file row cross-check; the AST count here is
-        # the machine-falsifiable half (61 direct `self._run_cmd(` sites).
-        self.assertEqual(_direct_call_count(_parse_main()), EXPECTED_DIRECT_CALL_SITES)
+        tree = _parse_main()
+        self.assertEqual(_direct_call_count(tree), EXPECTED_DIRECT_CALL_SITES)
+        self.assertEqual(_audit_direct_lines(), _direct_call_lines(tree))
 
 
 if __name__ == "__main__":
