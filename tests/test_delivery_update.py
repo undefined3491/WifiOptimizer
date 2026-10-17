@@ -216,7 +216,7 @@ class DeliveryFixture:
         keep = Path(path) / "py_modules" / ".keep"
         assert keep.is_file(), "fsync must run after the .keep touch"
 
-    def _fake_run_cmd(self, cmd, timeout=5, clean_env=False):
+    def _fake_run_cmd(self, cmd, timeout=5, clean_env=True):
         self.run_calls.append((list(cmd), timeout, clean_env))
         if cmd[0].endswith("curl"):
             joined = " ".join(cmd)

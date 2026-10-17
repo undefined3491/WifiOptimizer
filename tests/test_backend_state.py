@@ -410,7 +410,7 @@ class BackendStateFixture:
 
     # ---- _run_cmd stub ----
 
-    def _stub_run_cmd(self, cmd, timeout=None, clean_env=False):
+    def _stub_run_cmd(self, cmd, timeout=None, clean_env=True):
         key = tuple(cmd)
         self.run_calls.append(list(cmd))
         if key in self.cmd_scripts:

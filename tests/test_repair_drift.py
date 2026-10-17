@@ -425,7 +425,7 @@ class RepairFixture:
 
     # ---- stubs ----
 
-    def _stub_run_cmd(self, cmd, timeout=5, clean_env=False):
+    def _stub_run_cmd(self, cmd, timeout=5, clean_env=True):
         self.run_calls.append(list(cmd))
         cmd = list(cmd)
         for pred, res in self.run_script:

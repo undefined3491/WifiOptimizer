@@ -268,13 +268,15 @@ class Plugin:
 
     # ---- Helpers ----
 
-    def _run_cmd(self, cmd: list[str], timeout: int = 5, clean_env: bool = False) -> dict:
+    def _run_cmd(self, cmd: list[str], timeout: int = 5, clean_env: bool = True) -> dict:
         """Run a subprocess and return a result dict.
 
         clean_env strips LD_LIBRARY_PATH so children use system libraries
         instead of Decky's PyInstaller-bundled ones. Required for curl
-        (OpenSSL mismatch) and bash (readline symbol mismatch); without it,
-        those binaries fail with cryptic symbol-lookup errors.
+        (OpenSSL mismatch), bash (readline symbol mismatch) and systemctl
+        (libsystemd/OpenSSL mismatch); without it, those binaries fail with
+        cryptic symbol-lookup errors. Default True: no spawned system binary
+        needs the bundled path.
         """
         try:
             env = None
