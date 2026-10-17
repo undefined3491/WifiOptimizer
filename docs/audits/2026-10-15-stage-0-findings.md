@@ -128,6 +128,25 @@ The baseline report recorded **14 Important and 9 Minor findings**, with **no Cr
   verification. Stage 0 stays open pending candidate device validation and the
   first Stable release.
 
+## Device-discovered defects 2026-10-17 (non-ST0, Stage 0 open)
+
+This section tracks defects discovered during candidate device validation
+(matrix `docs/testing/results/2026-10-17-candidate-validation-matrix.md`), NOT
+audit ST0 findings. ST0 counts above are unchanged. Stage 0 stays open pending
+candidate device validation and the first Stable release.
+
+- **S-BE-04 (transient effective-read): corrected in source, isolated regression
+  verified.** Worker/rollback verification retries the effective read within a
+  bounded budget; persistent mismatch still fails named. Re-validation on device
+  pending. See the [design](../superpowers/specs/2026-10-17-device-fixes-design.md)
+  and [plan](../superpowers/plans/2026-10-17-device-fixes.md).
+- **S-BE-05 (unreconciled backend error key): corrected.** Converged backend
+  clears `errors.wifi_backend` + `backendSwitch` lock in the status-refresh
+  success path, remount-independent. Re-validation on device pending.
+- **S-OPT-02 (unwritable-but-correct sysfs): corrected.** Per-file
+  verify-after-write; unsupported-but-unchanged files are skip-notes, only
+  wrong-content files fail. Re-validation on device pending.
+
 ## Coverage and evidence
 
 Reviewed all `main.py`, `install.sh`, `defaults/dispatcher.sh.tmpl`, all `src/` files/components, callable contracts, package/lock/build metadata, `scripts/check_delivery.py`, its tests and `.github` delivery workflows/action/settings proposals. Delivery tooling was assessed alongside inherited runtime code. Generated-artifact reproducibility is covered by the successful exact-baseline hosted build/verification, rather than a new manual rewrite of dist during the audit.
