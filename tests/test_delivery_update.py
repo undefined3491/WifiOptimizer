@@ -160,7 +160,10 @@ class DeliveryFixture:
             "defaults/dispatcher.sh.tmpl": "#!/bin/bash\n# live\n",
         }
         for rel, text in payload.items():
-            (self.live / rel).write_text(text, encoding="utf-8")
+            # Byte-exact seeding: write_text() would translate "\n" to
+            # os.linesep on Windows, making live-vs-payload comparisons
+            # platform-dependent. The updater itself moves bytes.
+            (self.live / rel).write_bytes(text.encode("utf-8"))
 
     def snapshot_live(self):
         return {
@@ -188,9 +191,9 @@ class DeliveryFixture:
                 }
             ),
             "main.py": "# updated backend\n",
-            "decky.pyi": "class Plugin: ...\n",
+            "decky.pyi": "class Plugin: ...  # new\n",
             "dist/index.js": "console.log('new');\n",
-            "dist/index.js.map": json.dumps({"version": 3, "mappings": "AAAA"}),
+            "dist/index.js.map": json.dumps({"version": 3, "mappings": "AAAB"}),
             "defaults/dispatcher.sh.tmpl": "#!/bin/bash\n# new\n",
         }
         with tarfile.open(path, "w:gz") as tar:
