@@ -132,23 +132,52 @@ if [ ! -s "$SRC/dist/index.js" ] || [ ! -s "$SRC/dist/index.js.map" ]; then
     fail "dist payload is empty"
 fi
 
-# Commit. The live directory is never removed or renamed: a fresh install
-# with no live dir is a single no-clobber rename; an upgrade is validated
-# per-file renames (atomic on the same filesystem), never truncating cp.
+# Commit. The live directory is never removed or renamed: both fresh and
+# upgrade commit only the 7 allowlisted files via per-file renames (atomic
+# on the same filesystem), never truncating cp and never moving the whole
+# tree. The live dir is re-checked atomically directly before commit
+# (TOCTOU): mkdir succeeds only when live is still absent; otherwise the
+# upgrade path is taken instead of nesting the tree inside live.
 if [ ! -d "$PLUGIN_DIR" ]; then
     echo "Installing to $PLUGIN_DIR..."
     UPGRADING=false
-    if ! mv -n "$SRC" "$PLUGIN_DIR"; then
-        fail "fresh install rename failed"
+    # Atomic fresh gate: succeeds only when live is still absent at commit
+    # time. Fresh uses no-clobber per-file moves (mv -n); the fallback
+    # below uses plain overwriting moves.
+    if mkdir "$PLUGIN_DIR" 2>/dev/null; then
+        mkdir -p "$PLUGIN_DIR/dist" "$PLUGIN_DIR/defaults" "$PLUGIN_DIR/py_modules"
+        for shipped in $SHIPPED_FILES; do
+            if mv -n "$SRC/$shipped" "$PLUGIN_DIR/$shipped"; then
+                COMMITTED=$((COMMITTED + 1))
+            else
+                # Mid-loop failure: withhold the restart, report the partial
+                # count, and retain the stage for retry (drop the EXIT trap).
+                trap - EXIT
+                fail "commit failed at $shipped (stage retained for retry: $STAGE_DIR)"
+            fi
+        done
+        touch "$PLUGIN_DIR/py_modules/.keep"
+    else
+        echo "Live directory appeared during install; upgrading existing installation..."
+        UPGRADING=true
+        mkdir -p "$PLUGIN_DIR/dist" "$PLUGIN_DIR/defaults"
+        for shipped in $SHIPPED_FILES; do
+            if mv "$SRC/$shipped" "$PLUGIN_DIR/$shipped"; then
+                COMMITTED=$((COMMITTED + 1))
+            else
+                # Mid-loop failure: withhold the restart, report the partial
+                # count, and retain the stage for retry (drop the EXIT trap).
+                trap - EXIT
+                fail "commit failed at $shipped (stage retained for retry: $STAGE_DIR)"
+            fi
+        done
+        mkdir -p "$PLUGIN_DIR/py_modules"
+        touch "$PLUGIN_DIR/py_modules/.keep"
     fi
-    if [ -d "$SRC" ]; then
-        fail "live directory appeared during install; rerun to upgrade"
-    fi
-    mkdir -p "$PLUGIN_DIR/py_modules"
-    touch "$PLUGIN_DIR/py_modules/.keep"
 else
     echo "Upgrading existing installation..."
     UPGRADING=true
+    mkdir -p "$PLUGIN_DIR/dist" "$PLUGIN_DIR/defaults"
     for shipped in $SHIPPED_FILES; do
         if mv "$SRC/$shipped" "$PLUGIN_DIR/$shipped"; then
             COMMITTED=$((COMMITTED + 1))
@@ -178,7 +207,7 @@ if [ "$UPGRADING" = true ]; then
 else
     echo "$PLUGIN_DISPLAY_NAME installed! Open the Quick Access Menu to configure."
 fi
-echo 'FILE_COMMIT="7/7"'
+echo "FILE_COMMIT=\"$COMMITTED/7\""
 echo "RESTART_RC=\"$RESTART_RC\""
 echo 'NEXT_HEALTH="load_unconfirmed (verify version after restart)"'
 

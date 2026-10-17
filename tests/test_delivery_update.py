@@ -172,7 +172,7 @@ class DeliveryFixture:
     def stage_dirs(self):
         return [p for p in self.base.iterdir() if p.name.startswith(".wifi-optimizer-stage-")]
 
-    def build_tarball(self, path, version, package_version=None, plugin_name=None, corrupt=False):
+    def build_tarball(self, path, version, package_version=None, plugin_name=None, corrupt=False, with_symlink=False):
         if corrupt:
             Path(path).write_bytes(b"not a tarball")
             return
@@ -199,6 +199,11 @@ class DeliveryFixture:
                 info = tarfile.TarInfo(f"{root}/{rel}")
                 info.size = len(data)
                 tar.addfile(info, io.BytesIO(data))
+            if with_symlink:
+                link = tarfile.TarInfo(f"{root}/evil-link")
+                link.type = tarfile.SYMTYPE
+                link.linkname = "/etc/passwd"
+                tar.addfile(link)
 
     # -- scripted process effects ------------------------------------------
 
@@ -232,6 +237,10 @@ class DeliveryFixture:
                 self.build_tarball(out_path, NEXT_VERSION, corrupt=True)
             elif self.curl_behavior == "version_mismatch":
                 self.build_tarball(out_path, NEXT_VERSION, package_version="9.9.9")
+            elif self.curl_behavior == "symlink":
+                self.build_tarball(out_path, NEXT_VERSION, with_symlink=True)
+            elif self.curl_behavior == "wrong_plugin":
+                self.build_tarball(out_path, NEXT_VERSION, plugin_name="Evil Plugin")
             else:
                 self.build_tarball(out_path, NEXT_VERSION)
             return {"success": True, "stdout": "", "stderr": "", "returncode": 0}
@@ -335,6 +344,48 @@ class DeliveryUpdateTests(unittest.IsolatedAsyncioTestCase):
         assert job.get("phase") == "failed", job
         assert (job.get("result") or {}).get("errors") == ["identity_mismatch"], job.get("result")
         assert fx.snapshot_live() == before
+        assert fx.stage_dirs() == []
+        assert fx.systemctl_calls == []
+
+    async def test_symlink_entry_leaves_live_identical(self):
+        fx = self.fixture()
+        before = fx.snapshot_live()
+        before_main = (fx.live / "main.py").read_bytes()
+        before_bundle = (fx.live / "dist/index.js").read_bytes()
+        before_map = (fx.live / "dist/index.js.map").read_bytes()
+        fx.curl_behavior = "symlink"
+        started = await fx.plugin.apply_update()
+        assert started.get("accepted") is True, started
+        await fx.plugin._update_task
+        job = fx.plugin._update_job
+        assert job.get("phase") == "failed", job
+        errors = (job.get("result") or {}).get("errors") or []
+        assert errors and errors[0] == "archive_invalid", job.get("result")
+        assert fx.snapshot_live() == before
+        assert (fx.live / "main.py").read_bytes() == before_main
+        assert (fx.live / "dist/index.js").read_bytes() == before_bundle
+        assert (fx.live / "dist/index.js.map").read_bytes() == before_map
+        assert fx.stage_dirs() == []
+        assert fx.systemctl_calls == []
+
+    async def test_wrong_plugin_name_leaves_live_identical(self):
+        fx = self.fixture()
+        before = fx.snapshot_live()
+        before_main = (fx.live / "main.py").read_bytes()
+        before_bundle = (fx.live / "dist/index.js").read_bytes()
+        before_map = (fx.live / "dist/index.js.map").read_bytes()
+        fx.curl_behavior = "wrong_plugin"
+        started = await fx.plugin.apply_update()
+        assert started.get("accepted") is True, started
+        await fx.plugin._update_task
+        job = fx.plugin._update_job
+        assert job.get("phase") == "failed", job
+        errors = (job.get("result") or {}).get("errors") or []
+        assert errors and errors[0] == "identity_mismatch", job.get("result")
+        assert fx.snapshot_live() == before
+        assert (fx.live / "main.py").read_bytes() == before_main
+        assert (fx.live / "dist/index.js").read_bytes() == before_bundle
+        assert (fx.live / "dist/index.js.map").read_bytes() == before_map
         assert fx.stage_dirs() == []
         assert fx.systemctl_calls == []
 

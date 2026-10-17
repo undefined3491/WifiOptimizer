@@ -3880,6 +3880,7 @@ class Plugin:
         forces update_available True, so a crash-during-commit can never
         strand a mixed tree without a re-offer on the next boot.
         """
+        missing = []
         try:
             current = decky.DECKY_PLUGIN_VERSION
             plugin_dir = decky.DECKY_PLUGIN_DIR
@@ -3968,7 +3969,9 @@ class Plugin:
                 "success": False,
                 "current_version": decky.DECKY_PLUGIN_VERSION,
                 "update_available": False,
+                "missing_files": missing,
                 "message": str(e),
+                "errors": ["resolve_failed"],
             }
 
     async def apply_update(self) -> dict:
@@ -3998,7 +4001,9 @@ class Plugin:
                     "message": "A WiFi backend switch is in progress; try again when it finishes.",
                 }
             previous = dict(self._update_job)
-            job_id = int(time.time())
+            seq = self.__dict__.get("_update_seq", 0) + 1
+            self.__dict__["_update_seq"] = seq
+            job_id = f"{int(time.time())}-{os.getpid()}-{seq}"
             self._update_job.update(
                 {
                     "in_progress": True,
@@ -4039,7 +4044,12 @@ class Plugin:
             return {"accepted": True, "target": target, "job_id": job_id}
         except Exception as e:
             decky.logger.error(f"apply_update error: {e}")
-            return self._unexpected_response(e)
+            return {
+                "accepted": False,
+                "reason": "unexpected",
+                "message": str(e),
+                "errors": ["unexpected"],
+            }
 
     def _fsync_dir(self, path: str):
         """Durability-sync a directory after commit (Linux dir-fsync semantics).
@@ -4053,7 +4063,7 @@ class Plugin:
         finally:
             os.close(fd)
 
-    async def _update_worker(self, target: str, job_id: int):
+    async def _update_worker(self, target: str, job_id: str):
         """Run the staged Stable update to completion in the background.
 
         Same-filesystem sibling staging with a dev gate, validated
@@ -4115,7 +4125,7 @@ class Plugin:
                 _finish("failed")
                 return
             try:
-                os.makedirs(stage_dir, mode=0o700)
+                os.makedirs(stage_dir, mode=0o700, exist_ok=True)
                 os.chmod(stage_dir, 0o700)
             except OSError as e:
                 errors.append("stage_failed")
