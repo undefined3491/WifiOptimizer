@@ -7,6 +7,7 @@ interface UpdatesSectionProps {
   checkingUpdate: boolean;
   updateInfo: UpdateCheckResult | null;
   updateError: string | null;
+  applyDisabled: boolean;
   onApply: () => void;
   onCheck: () => void;
 }
@@ -20,6 +21,7 @@ export function UpdatesSection({
   checkingUpdate,
   updateInfo,
   updateError,
+  applyDisabled,
   onApply,
   onCheck,
 }: UpdatesSectionProps) {
@@ -46,7 +48,7 @@ export function UpdatesSection({
             </div>
           </PanelSectionRow>
           <PanelSectionRow>
-            <ButtonItem layout="below" onClick={onApply}>
+            <ButtonItem layout="below" disabled={applyDisabled} onClick={onApply}>
               Update Now
             </ButtonItem>
           </PanelSectionRow>

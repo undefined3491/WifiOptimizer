@@ -207,6 +207,7 @@ export interface UpdateStartResult {
   target?: string;
   reason?: string;
   job_id?: number;
+  message?: string;
 }
 
 export type BadgeStatus = "active" | "locked" | "set" | "drifted" | "off" | "error" | "unknown";

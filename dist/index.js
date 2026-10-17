@@ -98,7 +98,6 @@ const reapplyAll = callable("reapply_all");
 const repairDrifted = callable("repair_drifted");
 const reapplyVolatile = callable("reapply_volatile");
 const resetSettings = callable("reset_settings");
-const setUpdateChannel = callable("set_update_channel");
 const checkForUpdate = callable("check_for_update");
 const applyUpdate = callable("apply_update");
 const startBackendSwitch = callable("start_backend_switch");
@@ -432,16 +431,12 @@ function BackendToggleRow({ status, backendSwitch, error, isBusy, canRetry, onTo
             })()] }));
 }
 
-const CHANNEL_OPTIONS = [
-    { data: "stable", label: "Stable" },
-    { data: "beta", label: "Beta" },
-];
-// The Updates panel section: channel selector, optional warning text for a
+// The Updates panel section: optional warning text for a
 // stuck / failed update, and a button that context-switches between
 // "Updating...", "Update Now", "Up to date", and "Check for Updates"
 // depending on state.
-function UpdatesSection({ channel, updating, checkingUpdate, updateInfo, updateError, onChannelChange, onApply, onCheck, }) {
-    return (SP_JSX.jsxs(DFL.PanelSection, { title: "Updates", children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.DropdownItem, { label: "Update channel", rgOptions: CHANNEL_OPTIONS, selectedOption: channel, onChange: (option) => onChannelChange(option.data) }) }), updateError && !updating && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { fontSize: theme.fontSize.body, color: theme.warning.text }, children: ["\u26A0 ", updateError] }) })), updating ? (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: theme.fontSize.body, color: theme.info.text }, children: "Updating... plugin will restart momentarily." }) })) : updateInfo?.update_available ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { fontSize: theme.fontSize.body, color: theme.success.text }, children: ["v", updateInfo.latest_version, " available (you have v", updateInfo.current_version, ")"] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: onApply, children: "Update Now" }) })] })) : (SP_JSX.jsxs(SP_JSX.Fragment, { children: [updateInfo && updateInfo.success === false && updateInfo.message && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: theme.fontSize.tiny, color: theme.error.text }, children: updateInfo.message }) })), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: checkingUpdate, onClick: onCheck, children: checkingUpdate
+function UpdatesSection({ updating, checkingUpdate, updateInfo, updateError, applyDisabled, onApply, onCheck, }) {
+    return (SP_JSX.jsxs(DFL.PanelSection, { title: "Updates", children: [updateError && !updating && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { fontSize: theme.fontSize.body, color: theme.warning.text }, children: ["\u26A0 ", updateError] }) })), updating ? (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: theme.fontSize.body, color: theme.info.text }, children: "Updating... plugin will restart momentarily." }) })) : updateInfo?.update_available ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { fontSize: theme.fontSize.body, color: theme.success.text }, children: ["v", updateInfo.latest_version, " available (you have v", updateInfo.current_version, ")"] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: applyDisabled, onClick: onApply, children: "Update Now" }) })] })) : (SP_JSX.jsxs(SP_JSX.Fragment, { children: [updateInfo && updateInfo.success === false && updateInfo.message && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: theme.fontSize.tiny, color: theme.error.text }, children: updateInfo.message }) })), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: checkingUpdate, onClick: onCheck, children: checkingUpdate
                                 ? "Checking..."
                                 : updateInfo?.success && !updateInfo?.update_available
                                     ? "Up to date"
@@ -933,20 +928,27 @@ function Content() {
             runUpdateCheck();
         }
     }, [status?.connected, runUpdateCheck]);
-    // Safety timeout: if an update was initiated but plugin_loader hasn't killed
-    // us within 60s, the detached update script probably failed (network drop,
-    // tarball corruption, etc.). Revert the UI so the user isn't stuck staring
-    // at "Updating..." forever, and surface a message they can act on.
+    // Safety timeout: if an update was accepted but plugin_loader hasn't
+    // killed us within 60s, the worker may have failed or the restart may
+    // have stalled. The outcome is unknown — never reported as success.
+    // Refresh first so a retry observes the job state (a still-running job
+    // answers the retry with an in_progress rejection), then release busy.
     SP_REACT.useEffect(() => {
         if (!updating)
             return;
         const id = setTimeout(() => {
-            console.error("WiFi Optimizer TMS: update didn't complete within 60s");
-            setUpdating(false);
-            setUpdateError("Update didn't complete. Try again, or reinstall manually from Konsole.");
+            console.error("WiFi Optimizer TMS: update status unknown after 60s");
+            (async () => {
+                await refreshStatus(true);
+                if (disposedRef.current)
+                    return;
+                setBusy(false);
+                setUpdating(false);
+                setUpdateError("Update status unknown — verify version after restart. If the version didn't change, retry the update.");
+            })();
         }, UPDATE_TIMEOUT_MS);
         return () => clearTimeout(id);
-    }, [updating]);
+    }, [updating, refreshStatus]);
     // Periodic update re-check - QAM often caches the panel across close/reopen,
     // so the mount-effect check doesn't re-fire. This heartbeat catches new
     // releases when the panel has been left open for a while. Paused when the
@@ -1377,28 +1379,32 @@ function Content() {
     };
     // Update-flow handlers, used by the top update banner and the Updates
     // section. Share the updating/updateError state so either surface can
-    // initiate a check or apply an update.
+    // initiate a check or apply an update. The backend accepts at most one
+    // job: a rejection (in_progress, switch_in_progress, no_update,
+    // no_release) means nothing launched, so the UI only reports it; an
+    // accept holds busy until the restart kills the connection or the
+    // safety timeout fires.
     const handleApplyUpdate = async () => {
+        if (busyRef.current)
+            return;
         setUpdateError(null);
-        setUpdating(true);
         try {
             const r = await applyUpdate();
             if (disposedRef.current)
                 return;
-            if (r && !r.success) {
-                setUpdating(false);
-                setUpdateError(r.message ?? "Update failed. Please try again.");
+            if (!r || !r.accepted) {
+                setUpdateError(r?.message ?? "Update couldn't start. Please try again.");
+                await refreshStatus(true);
+                return;
             }
-            // On success plugin_loader restarts and kills the connection, which
-            // lands in the catch below; the safety-timeout effect covers a stall.
+            setBusy(true);
+            setUpdating(true);
         }
         catch {
-            // A genuine pre-launch failure surfaces here. A restart-kill after a
-            // successful launch clears when the panel reloads.
             if (disposedRef.current)
                 return;
-            setUpdating(false);
-            setUpdateError("Update failed. Try again, or reinstall manually from Konsole.");
+            setUpdateError("Update failed to start. Try again, or reinstall manually from Konsole.");
+            await refreshStatus(true);
         }
     };
     const handleCheckForUpdate = async () => {
@@ -1423,28 +1429,6 @@ function Content() {
             return;
         setCheckingUpdate(false);
     };
-    const handleChannelChange = async (nextChannel) => {
-        try {
-            const r = await setUpdateChannel(nextChannel);
-            if (disposedRef.current)
-                return;
-            if (r && !r.success) {
-                setUpdateError(r.message ?? "Couldn't change update channel.");
-            }
-            else {
-                setUpdateError(null);
-            }
-        }
-        catch {
-            if (disposedRef.current)
-                return;
-            setUpdateError("Couldn't change update channel.");
-        }
-        if (disposedRef.current)
-            return;
-        setUpdateInfo(null);
-        await refreshStatus();
-    };
     // Don't render content until first status arrives (prevents disconnect flash).
     // A failed first load renders an error with retry instead of hanging blank.
     if (!status) {
@@ -1465,6 +1449,11 @@ function Content() {
     const canRetry = backendSwitch?.error != null &&
         !backendSwitch?.in_progress &&
         !isBusy;
+    // Update/switch mutual exclusion (D7): Update Now is disabled while a
+    // backend switch is in flight or other work holds busy; the backend
+    // toggle is already disabled while updating via mutationLocked/isBusy,
+    // which handleApplyUpdate sets on an accepted start.
+    const updateApplyDisabled = (backendSwitch?.in_progress ?? false) || isBusy;
     // Check if all safe optimizations are already active
     const allSafeActive = connected &&
         status?.live?.power_save_off &&
@@ -1478,7 +1467,7 @@ function Content() {
                     ? `${s?.device_label} - ${s?.chip_label}`
                     : s?.chip_label && s.chip_label !== "unknown"
                         ? s.chip_label
-                        : undefined }), supportTier === 3 && (SP_JSX.jsx(Banner, { variant: "info", children: "Unknown WiFi hardware detected. Some optimizations may not apply." })), updateInfo?.update_available && !updating && (SP_JSX.jsx(DFL.PanelSection, { children: SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs(DFL.ButtonItem, { layout: "below", onClick: handleApplyUpdate, children: ["Update to v", updateInfo.latest_version] }) }) })), updating && (SP_JSX.jsx(DFL.PanelSection, { children: SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: theme.fontSize.body, color: theme.info.text }, children: "Updating... plugin will restart momentarily." }) }) })), connected && !s?.last_applied && (SP_JSX.jsxs(Banner, { variant: "info", children: ["Tap ", SP_JSX.jsx("strong", { children: "Optimize Safe" }), " to get started."] })), connected && !!s?.last_applied && driftCount > 0 && (SP_JSX.jsxs(Banner, { variant: "warning", icon: "\u26A0", children: [driftCount, " setting", driftCount > 1 ? "s" : "", " drifted after wake.", " ", SP_JSX.jsx("span", { style: { textDecoration: "underline", cursor: "pointer" }, onClick: handleRepair, children: "Fix now" })] })), !connected && (SP_JSX.jsx(Banner, { variant: "error", icon: "\u2715", children: "Not connected to WiFi. Connect first, then optimize." })), actionError && (SP_JSX.jsx(Banner, { variant: "error", icon: "\u2715", children: actionError })), actionWarnings && actionWarnings.length > 0 && (SP_JSX.jsx(Banner, { variant: "warning", icon: "\u26A0", children: actionWarnings.map((w, i) => (SP_JSX.jsxs("span", { children: [w, i < actionWarnings.length - 1 && SP_JSX.jsx("br", {})] }, i))) })), unknownOwners.length > 0 && (SP_JSX.jsxs(Banner, { variant: "warning", icon: "\u26A0", children: [unknownOwners.length, " setting", unknownOwners.length > 1 ? "s" : "", " ", "lost track of ", unknownOwners.length > 1 ? "their" : "its", " network (", unknownOwners.join(", "), "). Re-apply on the desired network."] })), isStale && (SP_JSX.jsxs(Banner, { variant: "warning", icon: "\u26A0", children: ["Showing last known status", statusAt ? ` from ${new Date(statusAt).toLocaleTimeString()}` : "", " ", "\u2014 refresh failed", statusError ? `: ${statusError}` : "", ".", " ", SP_JSX.jsx("span", { style: { textDecoration: "underline", cursor: "pointer" }, onClick: () => refreshStatus(true), children: "Retry now" })] })), backendSwitch && !backendSwitch.in_progress && backendSwitch.result && (() => {
+                        : undefined }), supportTier === 3 && (SP_JSX.jsx(Banner, { variant: "info", children: "Unknown WiFi hardware detected. Some optimizations may not apply." })), updateInfo?.update_available && !updating && (SP_JSX.jsx(DFL.PanelSection, { children: SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs(DFL.ButtonItem, { layout: "below", disabled: updateApplyDisabled, onClick: handleApplyUpdate, children: ["Update to v", updateInfo.latest_version] }) }) })), updating && (SP_JSX.jsx(DFL.PanelSection, { children: SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: theme.fontSize.body, color: theme.info.text }, children: "Updating... plugin will restart momentarily." }) }) })), connected && !s?.last_applied && (SP_JSX.jsxs(Banner, { variant: "info", children: ["Tap ", SP_JSX.jsx("strong", { children: "Optimize Safe" }), " to get started."] })), connected && !!s?.last_applied && driftCount > 0 && (SP_JSX.jsxs(Banner, { variant: "warning", icon: "\u26A0", children: [driftCount, " setting", driftCount > 1 ? "s" : "", " drifted after wake.", " ", SP_JSX.jsx("span", { style: { textDecoration: "underline", cursor: "pointer" }, onClick: handleRepair, children: "Fix now" })] })), !connected && (SP_JSX.jsx(Banner, { variant: "error", icon: "\u2715", children: "Not connected to WiFi. Connect first, then optimize." })), actionError && (SP_JSX.jsx(Banner, { variant: "error", icon: "\u2715", children: actionError })), actionWarnings && actionWarnings.length > 0 && (SP_JSX.jsx(Banner, { variant: "warning", icon: "\u26A0", children: actionWarnings.map((w, i) => (SP_JSX.jsxs("span", { children: [w, i < actionWarnings.length - 1 && SP_JSX.jsx("br", {})] }, i))) })), unknownOwners.length > 0 && (SP_JSX.jsxs(Banner, { variant: "warning", icon: "\u26A0", children: [unknownOwners.length, " setting", unknownOwners.length > 1 ? "s" : "", " ", "lost track of ", unknownOwners.length > 1 ? "their" : "its", " network (", unknownOwners.join(", "), "). Re-apply on the desired network."] })), isStale && (SP_JSX.jsxs(Banner, { variant: "warning", icon: "\u26A0", children: ["Showing last known status", statusAt ? ` from ${new Date(statusAt).toLocaleTimeString()}` : "", " ", "\u2014 refresh failed", statusError ? `: ${statusError}` : "", ".", " ", SP_JSX.jsx("span", { style: { textDecoration: "underline", cursor: "pointer" }, onClick: () => refreshStatus(true), children: "Retry now" })] })), backendSwitch && !backendSwitch.in_progress && backendSwitch.result && (() => {
                 const r = backendSwitch.result;
                 // Treat reconnect timeout as a warning even when the backend-level
                 // switch succeeded - the system is switched but WiFi didn't come back.
@@ -1539,7 +1528,7 @@ function Content() {
                                                 setDnsProviderDraft("custom");
                                             setDnsAddressesDraft(e.target.value);
                                             setDnsDirty(true);
-                                        }, onFocus: () => setDnsFocused(true), onBlur: () => setDnsFocused(false) }) })), dnsDraftError && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: theme.fontSize.small, color: theme.error.text }, children: dnsDraftError }) })), dnsProviderDraft !== null && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: mutationLocked, onClick: handleDnsApply, children: "Apply DNS" }) })), dnsProviderDraft !== null && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: mutationLocked, onClick: dropDnsDraft, children: "Cancel" }) }))] })) }), SP_JSX.jsx(InfoRow, { label: "Disable IPv6", subtitle: "Use IPv4 only on this network", explanation: "Some networks have poor or misconfigured IPv6 support, which can cause slow DNS resolution, connection timeouts, or routing issues. Disabling IPv6 forces all traffic through IPv4. Only enable this if you're experiencing issues - most modern networks handle IPv6 fine.", ...getBadge("ipv6", status, errors.ipv6 ?? null), checked: s?.ipv6_disabled ?? false, disabled: mutationLocked || (!connected && !s?.ipv6_disabled), error: errors.ipv6, onChange: (val) => handleToggle("ipv6", () => setIpv6(val)) }), SP_JSX.jsx(InfoRow, { label: "Traffic shaping (CAKE)", subtitle: "Fair queuing and bufferbloat prevention", explanation: 'Replaces the egress qdisc on this device with CAKE "unlimited diffserv4 nat ack-filter" (no bandwidth limit set). It only orders packets leaving this device; it cannot control other devices, the access point, or the ISP bottleneck, and any effect needs measurement under load. Resets on reboot and is reapplied automatically if auto-fix on wake is enabled.', ...getBadge("cake", status, errors.cake ?? null), checked: s?.cake_enabled ?? false, disabled: mutationLocked || (!connected && !s?.cake_enabled), error: errors.cake, onChange: (val) => handleToggle("cake", () => setCake(val)) }), status?.live?.backend_tool_available && (SP_JSX.jsx(BackendToggleRow, { status: status, backendSwitch: backendSwitch, error: errors.wifi_backend ?? backendSwitch?.error, isBusy: mutationLocked, canRetry: canRetry, onToggle: handleBackendToggle, onRetry: handleBackendRetry }))] }), SP_JSX.jsxs(DFL.PanelSection, { title: "Live status", children: [connected && status?.live?.ip_address && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { fontSize: theme.fontSize.tiny, color: theme.text.tertiary }, children: ["IP: ", status.live.ip_address] }) })), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(StatsGrid, { live: status?.live ?? {}, connected: connected }) })] }), SP_JSX.jsx(ActionsSection, { connected: connected, isBusy: mutationLocked, onForceReapply: handleForceReapply, onReset: handleResetSettings }), SP_JSX.jsx(UpdatesSection, { channel: s?.update_channel ?? "stable", updating: updating, checkingUpdate: checkingUpdate, updateInfo: updateInfo, updateError: updateError, onChannelChange: handleChannelChange, onApply: handleApplyUpdate, onCheck: handleCheckForUpdate }), SP_JSX.jsx(PanelFooter, { version: status?.version ?? "?" })] }));
+                                        }, onFocus: () => setDnsFocused(true), onBlur: () => setDnsFocused(false) }) })), dnsDraftError && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: theme.fontSize.small, color: theme.error.text }, children: dnsDraftError }) })), dnsProviderDraft !== null && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: mutationLocked, onClick: handleDnsApply, children: "Apply DNS" }) })), dnsProviderDraft !== null && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: mutationLocked, onClick: dropDnsDraft, children: "Cancel" }) }))] })) }), SP_JSX.jsx(InfoRow, { label: "Disable IPv6", subtitle: "Use IPv4 only on this network", explanation: "Some networks have poor or misconfigured IPv6 support, which can cause slow DNS resolution, connection timeouts, or routing issues. Disabling IPv6 forces all traffic through IPv4. Only enable this if you're experiencing issues - most modern networks handle IPv6 fine.", ...getBadge("ipv6", status, errors.ipv6 ?? null), checked: s?.ipv6_disabled ?? false, disabled: mutationLocked || (!connected && !s?.ipv6_disabled), error: errors.ipv6, onChange: (val) => handleToggle("ipv6", () => setIpv6(val)) }), SP_JSX.jsx(InfoRow, { label: "Traffic shaping (CAKE)", subtitle: "Fair queuing and bufferbloat prevention", explanation: 'Replaces the egress qdisc on this device with CAKE "unlimited diffserv4 nat ack-filter" (no bandwidth limit set). It only orders packets leaving this device; it cannot control other devices, the access point, or the ISP bottleneck, and any effect needs measurement under load. Resets on reboot and is reapplied automatically if auto-fix on wake is enabled.', ...getBadge("cake", status, errors.cake ?? null), checked: s?.cake_enabled ?? false, disabled: mutationLocked || (!connected && !s?.cake_enabled), error: errors.cake, onChange: (val) => handleToggle("cake", () => setCake(val)) }), status?.live?.backend_tool_available && (SP_JSX.jsx(BackendToggleRow, { status: status, backendSwitch: backendSwitch, error: errors.wifi_backend ?? backendSwitch?.error, isBusy: mutationLocked, canRetry: canRetry, onToggle: handleBackendToggle, onRetry: handleBackendRetry }))] }), SP_JSX.jsxs(DFL.PanelSection, { title: "Live status", children: [connected && status?.live?.ip_address && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { fontSize: theme.fontSize.tiny, color: theme.text.tertiary }, children: ["IP: ", status.live.ip_address] }) })), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(StatsGrid, { live: status?.live ?? {}, connected: connected }) })] }), SP_JSX.jsx(ActionsSection, { connected: connected, isBusy: mutationLocked, onForceReapply: handleForceReapply, onReset: handleResetSettings }), SP_JSX.jsx(UpdatesSection, { updating: updating, checkingUpdate: checkingUpdate, updateInfo: updateInfo, updateError: updateError, applyDisabled: updateApplyDisabled, onApply: handleApplyUpdate, onCheck: handleCheckForUpdate }), SP_JSX.jsx(PanelFooter, { version: status?.version ?? "?" })] }));
 }
 var index = definePlugin(() => {
     let gameLifetimeUnsub = null;
