@@ -273,8 +273,10 @@ class Plugin:
 
         clean_env strips LD_LIBRARY_PATH so children use system libraries
         instead of Decky's PyInstaller-bundled ones. Required for curl
-        (OpenSSL mismatch) and bash (readline symbol mismatch); without it,
-        those binaries fail with cryptic symbol-lookup errors.
+        (OpenSSL mismatch), bash (readline symbol mismatch) and systemctl
+        (libsystemd/OpenSSL mismatch); without it, those binaries fail with
+        cryptic symbol-lookup errors. Default True: no spawned system binary
+        needs the bundled path.
         """
         try:
             env = None
