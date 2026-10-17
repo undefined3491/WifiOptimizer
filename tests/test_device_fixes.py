@@ -694,7 +694,7 @@ class ConvergeReconcileTests(unittest.TestCase):
 
     def test_diverged_keeps_errors(self):
         body = _refresh_status_body()
-        assert re.search(r'!=\s*"unknown"', body), (
+        assert re.search(r'!==?\s*"unknown"', body), (
             "unknown effective must not converge (keeps both errors)")
 
     def test_in_progress_keeps_errors(self):

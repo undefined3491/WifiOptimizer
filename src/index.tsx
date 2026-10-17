@@ -170,6 +170,10 @@ function Content() {
   const backendPollTicksRef = useRef(0);
   const backendPollInFlightRef = useRef(false);
   const backendPollRetriesRef = useRef(0);
+  // Switch-state mirror for the converge reconciliation (S-BE-05/D2):
+  // refreshStatus is a stable callback, so it reads the switch state via
+  // this ref instead of closing over it.
+  const backendSwitchRef = useRef<BackendSwitchStatus | null>(null);
 
   const setBusy = useCallback((val: boolean) => {
     busyRef.current = val;
@@ -222,6 +226,31 @@ function Content() {
               setCustomDnsInput(s.settings.dns_servers || "");
             }
           }
+        }
+        // Convergence reconciliation (S-BE-05/D2): a converged backend
+        // clears its failure banner by itself, remount or not (QAM caching
+        // no longer matters). Converged = desired and effective agree on a
+        // known backend, no switch in progress, no outstanding reboot need.
+        // Genuine divergence (unknown effective, in-progress switch,
+        // outstanding reboot need) keeps both error surfaces; no other
+        // error keys are touched and no timers or polls are added.
+        const desired = s.live?.backend_desired;
+        const effective = s.live?.backend_effective;
+        const sw = backendSwitchRef.current;
+        const converged =
+          !!effective &&
+          effective !== "unknown" &&
+          desired === effective &&
+          !(sw?.in_progress ?? false) &&
+          !(sw?.result?.needs_reboot ?? false);
+        if (converged) {
+          setErrors((prev) => {
+            if (!("wifi_backend" in prev)) return prev;
+            const next = { ...prev };
+            delete next.wifi_backend;
+            return next;
+          });
+          setBackendSwitch(null);
         }
       } else {
         // Resolved failure: keep last known status, label it stale.
@@ -336,6 +365,12 @@ function Content() {
       }
     }, BACKEND_POLL_INTERVAL);
   }, [refreshStatus, setBusy]);
+
+  // Switch-state mirror (S-BE-05/D2): kept in sync below so the stable
+  // refreshStatus callback sees the current switch without re-closing.
+  useEffect(() => {
+    backendSwitchRef.current = backendSwitch;
+  }, [backendSwitch]);
 
   // Main refresh interval, paused when the panel is hidden so we don't burn
   // CPU/battery on ~12 subprocess calls every 3s in the background. On return
