@@ -55,17 +55,19 @@ Stage 0 stays open; no Stable, no version bump, no Watchdog. No DNS work
   switch, outstanding reboot need) keep both. This is remount-independent;
   QAM caching no longer matters.
 - **D3 — per-file ASPM verify.** `_apply_pcie_aspm_fix` (and only it — driver
-  sysfs keeps current behavior until observed otherwise) returns
-  `(None, notes)` on full success or `(code, detail, notes)` on failure, where
-  `notes` carries `"aspm-skip:<path>"` entries into the caller's existing
-  additive `errors[]`. Rule per file (link files AND `power/control`): attempt
+  sysfs keeps current behavior until observed otherwise) ALWAYS returns a
+  3-tuple `(code, detail, notes)`: success is `(None, None, notes)`, failure is
+  `(code, detail, notes)` — uniform arity so existing `code, detail = ...`
+  callers keep working after a mechanical migration (Task 4 includes the call
+  sites). Rule per file (link files AND `power/control`): attempt
   the write (missing paths keep the current silent-skip); re-read and
   `.strip()`-compare against desired; a file already at the desired value counts
   as OK whether or not the write succeeded (unsupported-but-unchanged =
-  skip-with-note, not a failure code); collect ALL files whose content differs
-  after the attempt (no return-on-first-`OSError`) and fail with `pcie_failed`
-  listing them, intent blocked per established rule. Read failures on a file
-  count that file as failed (never assume). Fixture models EPERM-vs-ENOENT
+  skip-with-note in `notes`, surfaced by callers into their additive `errors[]`
+  as `"aspm-skip:<path>"`, not a failure code); collect ALL files whose content
+  differs after the attempt (no return-on-first-`OSError`) and fail with
+  `pcie_failed` listing them, intent blocked per established rule. Read failures
+  on a file count that file as failed (never assume). Fixture models EPERM-vs-ENOENT
   flags; true TOCTOU races are a documented fixture limitation (device sysfs
   is atomic per write).
 

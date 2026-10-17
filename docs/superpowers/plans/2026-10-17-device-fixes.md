@@ -58,7 +58,7 @@
 
 **Interfaces:**
 - Consumes: Task 1 fixture.
-- Produces: `_poll_effective_backend(target, tries=3, delay=2.0)`; worker/rollback verification via the helper; `transient-unknown:N` notes; unchanged failure shapes otherwise.
+- Produces: `_poll_effective_backend(tries=3, delay=2.0)` (defaults; call sites pass nothing); worker/rollback verification via the helper; `transient-unknown:N` notes; unchanged failure shapes otherwise.
 
 - [ ] **Step 1: Verify red** Expected: FAIL on retry tests.
 - [ ] **Step 2: Implement** helper + 4 call sites (2 workers × final/rollback).
@@ -72,7 +72,7 @@
 - Modify: `src/index.tsx` (refreshStatus success path)
 - Test: typecheck + build + review checklist (no frontend unit infra)
 
-**Review checklist (verify by reading code + grep asserts):** converged (desired===effective, known, no in-progress, no outstanding reboot need) deletes `errors.wifi_backend` AND sets `backendSwitch` to `null` — and ONLY in that branch (grep: no other `delete next.wifi_backend` / `setBackendSwitch(null)` sites); diverged/unknown/in-progress keeps both; no other error keys touched; no new timers or polls.
+**Review checklist (verify by reading code + grep asserts):** converged (desired===effective, known, no in-progress, no outstanding reboot need) deletes `errors.wifi_backend` AND sets `backendSwitch` to `null` — scoped to the converge branch in `refreshStatus` (pre-existing legal sites `:303` terminal reconcile, `:791` pre-start clear, `:806` rejected start are allow-listed, not violations); diverged/unknown/in-progress keeps both; no other error keys touched; no new timers or polls.
 
 - [ ] **Step 1: Implement** per D2.
 - [ ] **Step 2: Verify** `tsc --noEmit --skipLibCheck` exit 0, `pnpm run build` exit 0 (pnpm v9, frozen lockfile; record pre-build hash, `dist/` diff only from this package).
@@ -82,7 +82,7 @@
 ### Task 4: Per-file ASPM verify (D3)
 
 **Files:**
-- Modify: `main.py` (`_apply_pcie_aspm_fix` only)
+- Modify: `main.py` (`_apply_pcie_aspm_fix` + mechanical migration of its unpack call sites to the uniform 3-tuple)
 - Test: `tests/test_device_fixes.py`
 
 **Interfaces:**
