@@ -759,9 +759,8 @@ class PcieVerifyTests(unittest.TestCase):
             f"missing path must stay a silent skip: {(code, detail)!r}")
         assert notes == [], f"all-writable converge must note nothing: {notes!r}"
         for name, want in contents.items():
-            with open(os_path(f, name)) as fh:
-                assert fh.read().strip() == want, (
-                    f"{name} must converge to {want!r}")
+            assert f.fs[os_path(f, name)].strip() == want, (
+                f"{name} must converge to {want!r}")
 
 
 def os_path(fixture, name):

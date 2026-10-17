@@ -1012,56 +1012,83 @@ class Plugin:
     def _apply_pcie_aspm_fix(self, enable: bool):
         """Disable or restore PCIe ASPM for the WiFi device.
         Prevents throughput degradation during sustained streaming.
-        Works on all PCIe-attached WiFi adapters. Returns None on success,
-        else ("pcie_failed", detail). An absent device or absent knobs stay
-        silent no-ops; present-but-unwritable knobs fail loudly."""
+        Works on all PCIe-attached WiFi adapters. ALWAYS returns the
+        uniform 3-tuple (code, detail, notes): success is
+        (None, None, notes), failure is ("pcie_failed", detail, notes).
+
+        S-OPT-02 (D3): verify-after-write per file (link L-state knobs AND
+        power/control). A missing path keeps the current silent skip; a
+        file already at the desired content counts as OK whether or not
+        the write succeeded (unsupported-but-unchanged is an
+        "aspm-skip:<path>" note for the caller's additive errors[], not a
+        failure). ALL files whose content differs after the attempt are
+        collected (no return-on-first-OSError) and fail with pcie_failed
+        listing them; a read failure counts that file as failed.
+        An absent device or absent knobs stay silent no-ops."""
+        notes = []
+        failed = []
         try:
             # Discover WiFi PCI device path dynamically
             iface = self._get_wifi_interface()
             if not iface:
-                return None
+                return (None, None, notes)
             device_link = os.path.realpath(f"/sys/class/net/{iface}/device")
             if not os.path.isdir(device_link):
-                return None
+                return (None, None, notes)
 
             # Disable/restore PCIe ASPM L-states
-            link_dir = os.path.join(device_link, "link")
-            if os.path.isdir(link_dir):
-                val = "0" if enable else "1"
-                for aspm_file in ["l0s_aspm", "l1_aspm", "l1_1_aspm", "l1_2_aspm",
-                                   "l1_1_pcipm", "l1_2_pcipm"]:
-                    path = os.path.join(link_dir, aspm_file)
-                    try:
-                        with open(path, "w") as f:
-                            f.write(val)
-                    except FileNotFoundError:
-                        pass
-                    except OSError as e:
-                        detail = f"{path}: {e}"
-                        decky.logger.error(f"PCIe ASPM write failed: {detail}")
-                        return ("pcie_failed", detail)
+            desired_link = "0" if enable else "1"
+            desired_power = "on" if enable else "auto"
+            targets = [
+                (os.path.join(device_link, "link", name), desired_link)
+                for name in ["l0s_aspm", "l1_aspm", "l1_1_aspm", "l1_2_aspm",
+                             "l1_1_pcipm", "l1_2_pcipm"]
+            ]
+            targets.append(
+                (os.path.join(device_link, "power", "control"), desired_power)
+            )
+            for path, want in targets:
+                try:
+                    with open(path, "w") as f:
+                        f.write(want)
+                    wrote = True
+                    write_error = None
+                except FileNotFoundError:
+                    # Absent knob: silent no-op, never verified.
+                    continue
+                except Exception as e:
+                    wrote = False
+                    write_error = e
+                try:
+                    with open(path, "r") as f:
+                        current = f.read().strip()
+                except Exception as e:
+                    detail = f"{path}: read failed: {e}"
+                    decky.logger.error(f"PCIe ASPM verify failed: {detail}")
+                    failed.append(detail)
+                    continue
+                if current == want:
+                    if not wrote:
+                        notes.append(f"aspm-skip:{path}")
+                else:
+                    if wrote:
+                        detail = f"{path}: still {current!r}, want {want!r}"
+                    else:
+                        detail = f"{path}: {write_error}"
+                    decky.logger.error(f"PCIe ASPM verify failed: {detail}")
+                    failed.append(detail)
 
-            # Disable/restore PCI runtime power management
-            power_control = os.path.join(device_link, "power", "control")
-            try:
-                with open(power_control, "w") as f:
-                    f.write("on" if enable else "auto")
-            except FileNotFoundError:
-                pass
-            except OSError as e:
-                detail = f"{power_control}: {e}"
-                decky.logger.error(f"PCIe power control write failed: {detail}")
-                return ("pcie_failed", detail)
-
+            if failed:
+                return ("pcie_failed", "; ".join(failed), notes)
             if enable:
                 decky.logger.info(f"PCIe ASPM disabled for {device_link}")
             else:
                 decky.logger.info(f"PCIe ASPM restored for {device_link}")
-            return None
+            return (None, None, notes)
         except Exception as e:
             detail = str(e)
             decky.logger.error(f"PCIe ASPM fix error: {e}")
-            return ("pcie_failed", detail)
+            return ("pcie_failed", detail, notes)
 
     def _install_dispatcher(self):
         """Install the NM dispatcher script. Returns None on success, else
@@ -1362,7 +1389,8 @@ class Plugin:
                     f"snapshot restore fallback for pcie: {restore_err}"
                 )
                 errors.append("fallback:pcie")
-                self._apply_pcie_aspm_fix(False)
+                _, _, pcie_notes = self._apply_pcie_aspm_fix(False)
+                errors.extend(pcie_notes)
             # Owned-profile cleanup (same literals + single conditional
             # reconnect as reset): settings.json + snapshot are removed
             # below, so orphaned values would otherwise survive with no
@@ -2211,14 +2239,14 @@ class Plugin:
                         "errors": errors,
                     }
 
-                pcie_err = self._apply_pcie_aspm_fix(True)
-                if pcie_err is not None:
-                    code, detail = pcie_err
+                pcie_code, pcie_detail, pcie_notes = self._apply_pcie_aspm_fix(True)
+                errors.extend(pcie_notes)
+                if pcie_code is not None:
                     return {
                         "success": False,
-                        "error": code,
+                        "error": pcie_code,
                         "message": "Couldn't configure PCIe power management",
-                        "detail": detail,
+                        "detail": pcie_detail,
                         "errors": errors,
                     }
 
@@ -2330,14 +2358,14 @@ class Plugin:
                     f"snapshot restore fallback for pcie: {restore_err}"
                 )
                 errors.append("fallback:pcie")
-                pcie_err = self._apply_pcie_aspm_fix(False)
-                if pcie_err is not None:
-                    code, detail = pcie_err
+                pcie_code, pcie_detail, pcie_notes = self._apply_pcie_aspm_fix(False)
+                errors.extend(pcie_notes)
+                if pcie_code is not None:
                     return {
                         "success": False,
-                        "error": code,
+                        "error": pcie_code,
                         "message": "Couldn't restore PCIe power management",
-                        "detail": detail,
+                        "detail": pcie_detail,
                         "errors": errors,
                     }
 
@@ -3823,7 +3851,7 @@ class Plugin:
                     f"snapshot restore fallback for pcie: {restore_err}"
                 )
                 errors.append("fallback:pcie")
-                self._apply_pcie_aspm_fix(False)
+                _, _, pcie_notes = self._apply_pcie_aspm_fix(False)
 
             # (b) Converge live iw + NM conf to power_save_disabled=True.
             if iface:
