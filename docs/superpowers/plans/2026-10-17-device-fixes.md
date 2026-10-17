@@ -34,7 +34,14 @@
 - Modify: none
 
 **Interfaces:**
-- Consumes: AST-extracted `_poll_effective_backend` (to be created — spec'd name/signature), worker verify sections, `refreshStatus` converge branch (review checklist, no unit harness), `_apply_pcie_aspm_fix`; scripted `is-active` sequences (transient unknowns then converge / persistent mismatch), in-memory fs for sysfs files with per-file writability flags.
+- Consumes: AST-extracted `_poll_effective_backend` (spec'd sync signature; the
+  fixture provides an `AssertionError`-raising shim until the helper exists, so
+  red means behavior-assert failure, never `ImportError`/`NameError`), worker
+  verify sections, `refreshStatus` converge branch (review checklist + grep
+  asserts below, no unit harness), `_apply_pcie_aspm_fix`; scripted `is-active`
+  sequences (transient unknowns then converge / persistent mismatch), in-memory
+  fs for sysfs files with per-file writability flags (EPERM-vs-ENOENT; TOCTOU
+  races out of scope, documented).
 - Produces: `DeviceFixFixture` used by Tasks 2-4.
 
 - [ ] **Step 1: Write failing tests**: `transient_unknown_retried_to_success`, `persistent_mismatch_still_fails`, `budget_exhaustion_notes_attempts`, `rollback_verify_retried`, `converged_clears_both_errors`, `diverged_keeps_errors`, `in_progress_keeps_errors`, `unwritable_but_correct_skipped_with_note`, `unwritable_and_wrong_fails_named`, `missing_path_still_skipped`.
@@ -65,7 +72,7 @@
 - Modify: `src/index.tsx` (refreshStatus success path)
 - Test: typecheck + build + review checklist (no frontend unit infra)
 
-**Review checklist (verify by reading code):** converged (desired===effective, known, no in-progress) deletes `errors.wifi_backend` AND clears `backendSwitch.error` to the fresh form; diverged/unknown/in-progress keeps both; no other error keys touched; no new timers or polls.
+**Review checklist (verify by reading code + grep asserts):** converged (desired===effective, known, no in-progress, no outstanding reboot need) deletes `errors.wifi_backend` AND sets `backendSwitch` to `null` — and ONLY in that branch (grep: no other `delete next.wifi_backend` / `setBackendSwitch(null)` sites); diverged/unknown/in-progress keeps both; no other error keys touched; no new timers or polls.
 
 - [ ] **Step 1: Implement** per D2.
 - [ ] **Step 2: Verify** `tsc --noEmit --skipLibCheck` exit 0, `pnpm run build` exit 0 (pnpm v9, frozen lockfile; record pre-build hash, `dist/` diff only from this package).
@@ -91,7 +98,7 @@
 ### Task 5: Docs state update
 
 **Files:**
-- Modify: `docs/audits/2026-10-15-stage-0-findings.md` (device-discovered defects section: S-BE-04/S-BE-05/S-OPT-02 corrected, re-validation pending on device)
+- Modify: `docs/audits/2026-10-15-stage-0-findings.md` — new section `## Device-discovered defects 2026-10-17 (non-ST0, Stage 0 open)` recording S-BE-04/S-BE-05/S-OPT-02 corrections with matrix links and pending on-device re-validation. Must NOT change the ST0 counts or suggest Stage 0 closure.
 - Test: none (docs only)
 
 - [ ] **Step 1: Update findings** with a short device-findings addendum (NOT audit ST0 findings — separate section; Stage 0 stays open).
