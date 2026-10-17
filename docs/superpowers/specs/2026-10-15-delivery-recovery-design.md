@@ -38,14 +38,13 @@ Stage payload and retain previous files under `<validated-decky-home>/.wifi-opti
 
 Use opened parent directory descriptors, no-follow operations, relative single-component names and directory-identity rechecks at mutation boundaries. Root-owned leaves beneath user-writable ancestors do not create a secure multi-user boundary. Document that limitation; do not infer safety from `realpath()` followed by an ordinary path write.
 
-User-writable settings supply only validated intent such as channel. They cannot choose executable/engine path, installation or rollback path, service name, arbitrary URL, candidate provenance or executable journal instructions. Derive installation paths from validated runtime context. Scope first-device support to the owner's captured LCD / SteamOS Stable setup; no silent generic fallback when prerequisites fail.
+User-writable settings supply only validated intent. They cannot choose executable/engine path, installation or rollback path, service name, arbitrary URL, candidate provenance or executable journal instructions. Derive installation paths from validated runtime context. Scope first-device support to the owner's captured LCD / SteamOS Stable setup; no silent generic fallback when prerequisites fail.
 
 ## Candidate resolution and payload validation
 
 Resolve each submitted candidate once to a full commit SHA. Persist repository identity, channel, release/tag identity where applicable, package version, commit SHA, archive digest and payload hashes. The digest identifies observed bytes; it is not an independent authenticity signature. Initial bootstrap trust remains the explicitly selected fork and HTTPS.
 
 - Stable: latest published Stable release, exact valid `vX.Y.Z` tag resolved to a commit, matching package version `X.Y.Z`. Missing release is an explicit no-release/error result; no in-app fallback to main.
-- Beta: resolve the existing `beta` branch to a commit, then read metadata and download from that same commit. Preserve version-based update availability; same-version republishing is outside this change.
 - Manual installer: preserve the disclosed latest-release lookup fallback to main, clearly labeled unreleased fallback, and pin main to a commit. Once a release/candidate is selected, archive or staging failure cannot silently select a different source.
 - Do not substitute upstream. Canonical identity is `undefined3491/wifi-optimizer-tms`, verified in the completed repository cutover; do not use the former repository slug as a fallback.
 

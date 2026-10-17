@@ -54,3 +54,5 @@ Investigate reliable Steam online/offline signals and association of outages wit
 Use the established [PR, CI, review and release workflow](CONTRIBUTING.md). The current package remains `0.11.6`. `0.11.7` is a possible first fork patch release after Stage 0; choose its final scope and version from the reviewed changes. A feature such as Connection Watchdog normally warrants a minor version, without resetting the existing version sequence to `0.1`.
 
 README describes current behavior, this roadmap records future work, and CHANGELOG records implemented changes. A roadmap status never substitutes for test evidence or authorizes a Stable publication.
+
+Stable-only distribution: the fork ships through published GitHub releases, the in-app Stable updater, and `install.sh` as rescue/bootstrap only. There is no Beta channel or `beta` branch. Store submission is deferred until Stage 0 + Stage 1 + Stage 2 close.
