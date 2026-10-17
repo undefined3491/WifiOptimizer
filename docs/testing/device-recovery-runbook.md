@@ -103,9 +103,9 @@ Procedura (wymaga zgody z §0 na odczyty sudo; to wciąż nie jest mutacja):
 BACKUP_DIR="$HOME/wifi-optimizer-recovery-$(date -u +%Y%m%d-%H%M)"
 mkdir -p "$BACKUP_DIR"
 SETTINGS_DIR="$HOME/homebrew/settings/WiFi Optimizer"
-cp -p "$SETTINGS_DIR/settings.json" "$BACKUP_DIR/settings.json"
-cp -p "$SETTINGS_DIR/system_snapshot.json" "$BACKUP_DIR/system_snapshot.json" 2>/dev/null || echo "NOTE: no system_snapshot.json"
-cp -p "$SETTINGS_DIR/last_enforced" "$BACKUP_DIR/last_enforced" 2>/dev/null || echo "NOTE: no last_enforced"
+/bin/cp -p "$SETTINGS_DIR/settings.json" "$BACKUP_DIR/settings.json"
+/bin/cp -p "$SETTINGS_DIR/system_snapshot.json" "$BACKUP_DIR/system_snapshot.json" 2>/dev/null || echo "NOTE: no system_snapshot.json"
+/bin/cp -p "$SETTINGS_DIR/last_enforced" "$BACKUP_DIR/last_enforced" 2>/dev/null || echo "NOTE: no last_enforced"
 sudo /usr/bin/cat /etc/NetworkManager/conf.d/99-wifi-optimizer.conf > "$BACKUP_DIR/99-wifi-optimizer.conf" 2>/dev/null || echo "NOTE: no NM conf"
 sudo /usr/bin/cat /etc/modprobe.d/99-wifi-optimizer.conf > "$BACKUP_DIR/99-modprobe.conf" 2>/dev/null || echo "NOTE: no modprobe conf"
 sudo /usr/bin/cat /etc/NetworkManager/conf.d/99-wifi-optimizer-backend.conf > "$BACKUP_DIR/99-backend.conf" 2>/dev/null || echo "NOTE: no generic backend conf (expected on found device)"
@@ -159,7 +159,8 @@ systemctl --no-pager is-active plugin_loader.service
 - Stop: loader nieaktywny / brak miejsca / brak połączenia — nie deployować „w ciemno"; wrócić do §1.
 
 Ścieżka (A) — install.sh (skrypt kopiowany na Deck przez operatora z walidacyjnego
-checkoutu przez `scp`, SHA commita przypięty do kandydata z §0 — nigdy `./install.sh`
+checkoutu przez `scp`, SHA commita przypięty do kandydata z rekordu kandydata
+(`docs/testing/results/2026-10-17-candidate-a3bb26b.md` §1) — nigdy `./install.sh`
 „które tam leży"):
 
 ```bash
@@ -175,9 +176,9 @@ bash ./install.sh 2>&1 | tee "$BACKUP_DIR/install-$(date -u +%Y%m%d-%H%M).log"
 Ścieżka (B) — kopia plików + restart (wymaga zgody na restart loadera):
 
 ```bash
-cp -p plugin.json package.json main.py decky.pyi "$DECKY_HOME/plugins/WiFi Optimizer/"
-cp -p dist/index.js dist/index.js.map "$DECKY_HOME/plugins/WiFi Optimizer/dist/"
-cp -p defaults/dispatcher.sh.tmpl "$DECKY_HOME/plugins/WiFi Optimizer/defaults/"
+/bin/cp -p plugin.json package.json main.py decky.pyi "$DECKY_HOME/plugins/WiFi Optimizer/"
+/bin/cp -p dist/index.js dist/index.js.map "$DECKY_HOME/plugins/WiFi Optimizer/dist/"
+/bin/cp -p defaults/dispatcher.sh.tmpl "$DECKY_HOME/plugins/WiFi Optimizer/defaults/"
 sudo /usr/bin/systemctl restart plugin_loader
 sleep 8
 systemctl --no-pager is-active plugin_loader.service
@@ -262,7 +263,7 @@ Uwaga o plikach, których ten rollback **nie odtwarza automatycznie**: stan usł
 | I1 | `sudo /usr/bin/python3 ./collect_deck_inventory.py --decky-home "$HOME/homebrew" > "$HOME/wifi-optimizer-inventory.json"` | exit `0`, JSON niepusty | nie-0 / pusty plik → zachować błąd, nie zmieniać konfiguracji |
 | I2 | `cat ~/homebrew/plugins/WiFi\ Optimizer/plugin.json` | nazwa/wersja kandydata | brak katalogu → nie instalować bez zgody |
 | I3 | `systemctl --no-pager status plugin_loader.service` | `active (running)` | `inactive/failed` → nie startować bez zgody |
-| B1 | `cp -p ~/homebrew/settings/WiFi\ Optimizer/settings.json $BACKUP_DIR/` | kopia + wpis SHA256 | brak źródła → przerwać, zweryfikować `$SETTINGS_DIR` |
+| B1 | `/bin/cp -p ~/homebrew/settings/WiFi\ Optimizer/settings.json $BACKUP_DIR/` | kopia + wpis SHA256 | brak źródła → przerwać, zweryfikować `$SETTINGS_DIR` |
 | B2 | `sha256sum -c $BACKUP_DIR/SHA256SUMS` | wszystkie `OK` | jakikolwiek `FAILED` → nie deployować |
 | D1 | `bash ./install.sh` | czysty log, nowa wersja w `plugin.json` | błąd poboru/manifestu/miejsca → §4 |
 | D2 | `sudo /usr/bin/systemctl restart plugin_loader` + `systemctl --no-pager is-active plugin_loader.service` | `active` w ~30 s | brak powrotu → journal (odczyt) + §4 |
