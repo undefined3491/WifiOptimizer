@@ -32,6 +32,7 @@ SOURCE = Path(__file__).resolve().parents[1] / "main.py"
 METHOD_NAMES = {
     "_read_desired_backend",
     "_read_effective_backend",
+    "_poll_effective_backend",
     "start_backend_switch",
     "_backend_switch_worker",
     "_generic_backend_switch_worker",

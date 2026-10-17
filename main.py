@@ -424,6 +424,43 @@ class Plugin:
             value = None
         return (value, services)
 
+    def _poll_effective_backend(self, tries=3, delay=2.0) -> tuple:
+        """Bounded re-read of the effective backend across restart windows.
+
+        S-BE-04 (D1): a single is-active sample can race the service/NM
+        restart and report a transient unknown that a later sample would
+        resolve. Re-reads via _read_effective_backend until the value is
+        non-None or the budget (tries samples, ~6-8 s incl. read time) is
+        exhausted. Only transient states (a service reporting anything
+        other than active/inactive, e.g. unknown/activating/failed) are
+        retried; a determinate None (both or neither service active) is an
+        immediate verdict, never a retry. Blocking time.sleep is safe
+        because every call site invokes this via the existing
+        asyncio.to_thread pattern (exactly like today's direct
+        _read_effective_backend calls -- no new event-loop blocking
+        beyond the ~6 s budget). Returns (value, services, attempts) with
+        no target parameter; callers surface interim unknowns in errors[]
+        as transient-unknown:N notes (never failure codes).
+        """
+        attempts = 0
+        value = None
+        services: dict = {}
+        for _ in range(tries):
+            attempts += 1
+            value, services = self._read_effective_backend()
+            if value is not None:
+                break
+            transient = any(
+                (services.get(svc) or {}).get("active")
+                not in ("active", "inactive")
+                for svc in ("iwd", "wpa_supplicant")
+            )
+            if not transient:
+                break
+            if attempts < tries:
+                time.sleep(delay)
+        return (value, services, attempts)
+
     def _get_current_backend(self) -> str | None:
         """Return 'iwd', 'wpa_supplicant', or None if unknown.
 
@@ -975,56 +1012,83 @@ class Plugin:
     def _apply_pcie_aspm_fix(self, enable: bool):
         """Disable or restore PCIe ASPM for the WiFi device.
         Prevents throughput degradation during sustained streaming.
-        Works on all PCIe-attached WiFi adapters. Returns None on success,
-        else ("pcie_failed", detail). An absent device or absent knobs stay
-        silent no-ops; present-but-unwritable knobs fail loudly."""
+        Works on all PCIe-attached WiFi adapters. ALWAYS returns the
+        uniform 3-tuple (code, detail, notes): success is
+        (None, None, notes), failure is ("pcie_failed", detail, notes).
+
+        S-OPT-02 (D3): verify-after-write per file (link L-state knobs AND
+        power/control). A missing path keeps the current silent skip; a
+        file already at the desired content counts as OK whether or not
+        the write succeeded (unsupported-but-unchanged is an
+        "aspm-skip:<path>" note for the caller's additive errors[], not a
+        failure). ALL files whose content differs after the attempt are
+        collected (no return-on-first-OSError) and fail with pcie_failed
+        listing them; a read failure counts that file as failed.
+        An absent device or absent knobs stay silent no-ops."""
+        notes = []
+        failed = []
         try:
             # Discover WiFi PCI device path dynamically
             iface = self._get_wifi_interface()
             if not iface:
-                return None
+                return (None, None, notes)
             device_link = os.path.realpath(f"/sys/class/net/{iface}/device")
             if not os.path.isdir(device_link):
-                return None
+                return (None, None, notes)
 
             # Disable/restore PCIe ASPM L-states
-            link_dir = os.path.join(device_link, "link")
-            if os.path.isdir(link_dir):
-                val = "0" if enable else "1"
-                for aspm_file in ["l0s_aspm", "l1_aspm", "l1_1_aspm", "l1_2_aspm",
-                                   "l1_1_pcipm", "l1_2_pcipm"]:
-                    path = os.path.join(link_dir, aspm_file)
-                    try:
-                        with open(path, "w") as f:
-                            f.write(val)
-                    except FileNotFoundError:
-                        pass
-                    except OSError as e:
-                        detail = f"{path}: {e}"
-                        decky.logger.error(f"PCIe ASPM write failed: {detail}")
-                        return ("pcie_failed", detail)
+            desired_link = "0" if enable else "1"
+            desired_power = "on" if enable else "auto"
+            targets = [
+                (os.path.join(device_link, "link", name), desired_link)
+                for name in ["l0s_aspm", "l1_aspm", "l1_1_aspm", "l1_2_aspm",
+                             "l1_1_pcipm", "l1_2_pcipm"]
+            ]
+            targets.append(
+                (os.path.join(device_link, "power", "control"), desired_power)
+            )
+            for path, want in targets:
+                try:
+                    with open(path, "w") as f:
+                        f.write(want)
+                    wrote = True
+                    write_error = None
+                except FileNotFoundError:
+                    # Absent knob: silent no-op, never verified.
+                    continue
+                except Exception as e:
+                    wrote = False
+                    write_error = e
+                try:
+                    with open(path, "r") as f:
+                        current = f.read().strip()
+                except Exception as e:
+                    detail = f"{path}: read failed: {e}"
+                    decky.logger.error(f"PCIe ASPM verify failed: {detail}")
+                    failed.append(detail)
+                    continue
+                if current == want:
+                    if not wrote:
+                        notes.append(f"aspm-skip:{path}")
+                else:
+                    if wrote:
+                        detail = f"{path}: still {current!r}, want {want!r}"
+                    else:
+                        detail = f"{path}: {write_error}"
+                    decky.logger.error(f"PCIe ASPM verify failed: {detail}")
+                    failed.append(detail)
 
-            # Disable/restore PCI runtime power management
-            power_control = os.path.join(device_link, "power", "control")
-            try:
-                with open(power_control, "w") as f:
-                    f.write("on" if enable else "auto")
-            except FileNotFoundError:
-                pass
-            except OSError as e:
-                detail = f"{power_control}: {e}"
-                decky.logger.error(f"PCIe power control write failed: {detail}")
-                return ("pcie_failed", detail)
-
+            if failed:
+                return ("pcie_failed", "; ".join(failed), notes)
             if enable:
                 decky.logger.info(f"PCIe ASPM disabled for {device_link}")
             else:
                 decky.logger.info(f"PCIe ASPM restored for {device_link}")
-            return None
+            return (None, None, notes)
         except Exception as e:
             detail = str(e)
             decky.logger.error(f"PCIe ASPM fix error: {e}")
-            return ("pcie_failed", detail)
+            return ("pcie_failed", detail, notes)
 
     def _install_dispatcher(self):
         """Install the NM dispatcher script. Returns None on success, else
@@ -1325,7 +1389,8 @@ class Plugin:
                     f"snapshot restore fallback for pcie: {restore_err}"
                 )
                 errors.append("fallback:pcie")
-                self._apply_pcie_aspm_fix(False)
+                _, _, pcie_notes = self._apply_pcie_aspm_fix(False)
+                errors.extend(pcie_notes)
             # Owned-profile cleanup (same literals + single conditional
             # reconnect as reset): settings.json + snapshot are removed
             # below, so orphaned values would otherwise survive with no
@@ -2174,14 +2239,14 @@ class Plugin:
                         "errors": errors,
                     }
 
-                pcie_err = self._apply_pcie_aspm_fix(True)
-                if pcie_err is not None:
-                    code, detail = pcie_err
+                pcie_code, pcie_detail, pcie_notes = self._apply_pcie_aspm_fix(True)
+                errors.extend(pcie_notes)
+                if pcie_code is not None:
                     return {
                         "success": False,
-                        "error": code,
+                        "error": pcie_code,
                         "message": "Couldn't configure PCIe power management",
-                        "detail": detail,
+                        "detail": pcie_detail,
                         "errors": errors,
                     }
 
@@ -2293,14 +2358,14 @@ class Plugin:
                     f"snapshot restore fallback for pcie: {restore_err}"
                 )
                 errors.append("fallback:pcie")
-                pcie_err = self._apply_pcie_aspm_fix(False)
-                if pcie_err is not None:
-                    code, detail = pcie_err
+                pcie_code, pcie_detail, pcie_notes = self._apply_pcie_aspm_fix(False)
+                errors.extend(pcie_notes)
+                if pcie_code is not None:
                     return {
                         "success": False,
-                        "error": code,
+                        "error": pcie_code,
                         "message": "Couldn't restore PCIe power management",
-                        "detail": detail,
+                        "detail": pcie_detail,
                         "errors": errors,
                     }
 
@@ -3786,7 +3851,8 @@ class Plugin:
                     f"snapshot restore fallback for pcie: {restore_err}"
                 )
                 errors.append("fallback:pcie")
-                self._apply_pcie_aspm_fix(False)
+                _, _, pcie_notes = self._apply_pcie_aspm_fix(False)
+                errors.extend(pcie_notes)
 
             # (b) Converge live iw + NM conf to power_save_disabled=True.
             if iface:
@@ -4370,6 +4436,7 @@ class Plugin:
                 detail = (write_result.get("stderr") or write_result.get("stdout") or "")[:200]
                 rolled_back = False
                 rollback_note = ""
+                rb_unknowns = 0
                 if repair_of is not None:
                     # Repair rollback via the helper route (ST0-009 D5):
                     # write_config the previous target, restart units,
@@ -4410,9 +4477,15 @@ class Plugin:
                             rb_tail = await asyncio.to_thread(self._run_cmd, rb_cmd, 10, True)
                             if not rb_tail["success"]:
                                 rb_problems.append(rb_name)
-                        rb_value, _rb_services = await asyncio.to_thread(
-                            self._read_effective_backend
+                        rb_value, _rb_services, rb_attempts = await asyncio.to_thread(
+                            self._poll_effective_backend
                         )
+                        rb_unknowns = rb_attempts - 1
+                        if rb_value is None and any(
+                                (_rb_services.get(svc) or {}).get("active")
+                                not in ("active", "inactive")
+                                for svc in ("iwd", "wpa_supplicant")):
+                            rb_unknowns += 1
                         if rb_ok and not rb_problems and rb_value == rb_prev:
                             rolled_back = True
                             rollback_note = f"rolled back to {rb_prev}"
@@ -4438,6 +4511,9 @@ class Plugin:
                 }
                 if repair_of is not None:
                     write_failed_result["rolled_back"] = rolled_back
+                if rb_unknowns > 0:
+                    write_failed_result["errors"] = [
+                        f"transient-unknown:{rb_unknowns}"]
                 self._backend_switch["result"] = write_failed_result
                 decky.logger.error(
                     f"backend switch failed at write_config: rc={write_result.get('returncode')}, "
@@ -4484,16 +4560,22 @@ class Plugin:
             # (ST0-009 D4), never the just-written conf. reconnect_timed_out
             # stays a connectivity flag: it is reported side by side and
             # never flips an effective-true transition to false.
-            final_backend, _steamos_services = await asyncio.to_thread(
-                self._read_effective_backend
+            final_backend, _steamos_services, _final_attempts = await asyncio.to_thread(
+                self._poll_effective_backend
             )
+            final_unknowns = _final_attempts - 1
+            if final_backend is None and any(
+                    (_steamos_services.get(svc) or {}).get("active")
+                    not in ("active", "inactive")
+                    for svc in ("iwd", "wpa_supplicant")):
+                final_unknowns += 1
 
             if needs_reboot:
                 # No rollback here: the interface is gone and the helper's
                 # recovery already ran; the needs_reboot flag must survive
                 # so the gate keeps rejecting until a reboot heals it.
                 self._backend_switch["phase"] = "failed"
-                self._backend_switch["result"] = {
+                needs_reboot_result = {
                     "success": False,
                     "backend": final_backend,
                     "target": target,
@@ -4502,6 +4584,10 @@ class Plugin:
                     "repair_of": repair_of,
                     "message": "Backend switched but wlan0 didn't come back. Reboot required.",
                 }
+                if final_unknowns > 0:
+                    needs_reboot_result["errors"] = [
+                        f"transient-unknown:{final_unknowns}"]
+                self._backend_switch["result"] = needs_reboot_result
             elif not restart_result["success"] or final_backend != target:
                 if final_backend != target:
                     failure_code = "effective_mismatch"
@@ -4518,6 +4604,7 @@ class Plugin:
                     detail = rs_stderr[:200] or rs_stdout[:200]
                 rolled_back = False
                 rollback_note = ""
+                rb_unknowns = 0
                 if repair_of is not None:
                     try:
                         rb_snapshot = _load_snapshot()
@@ -4554,9 +4641,15 @@ class Plugin:
                             rb_tail = await asyncio.to_thread(self._run_cmd, rb_cmd, 10, True)
                             if not rb_tail["success"]:
                                 rb_problems.append(rb_name)
-                        rb_value, _rb_services = await asyncio.to_thread(
-                            self._read_effective_backend
+                        rb_value, _rb_services, rb_attempts = await asyncio.to_thread(
+                            self._poll_effective_backend
                         )
+                        rb_unknowns = rb_attempts - 1
+                        if rb_value is None and any(
+                                (_rb_services.get(svc) or {}).get("active")
+                                not in ("active", "inactive")
+                                for svc in ("iwd", "wpa_supplicant")):
+                            rb_unknowns += 1
                         final_backend = rb_value
                         if rb_ok and not rb_problems and rb_value == rb_prev:
                             rolled_back = True
@@ -4587,11 +4680,19 @@ class Plugin:
                 }
                 if failure_code is not None:
                     mismatch_result["errors"] = [failure_code]
+                total_unknowns = final_unknowns + rb_unknowns
+                if total_unknowns > 0:
+                    mismatch_result.setdefault("errors", []).append(
+                        f"transient-unknown:{total_unknowns}")
                 if repair_of is not None:
                     mismatch_result["rolled_back"] = rolled_back
                 self._backend_switch["result"] = mismatch_result
             else:
                 self._backend_switch["phase"] = "done"
+                success_errors = (
+                    [f"transient-unknown:{final_unknowns}"]
+                    if final_unknowns > 0 else []
+                )
                 self._backend_switch["result"] = {
                     "success": True,
                     "backend": final_backend,
@@ -4600,7 +4701,7 @@ class Plugin:
                     "needs_reboot": False,
                     "reconnect_timed_out": reconnect_timed_out,
                     "repair_of": repair_of,
-                    "errors": [],
+                    "errors": success_errors,
                 }
             decky.logger.info(
                 f"backend switch: target={target}, final={final_backend}, "
@@ -4714,9 +4815,17 @@ class Plugin:
 
             # Effective verification (ST0-009 D4): compare the services
             # ground truth against the target, never the just-written conf.
-            final_backend, _final_services = await asyncio.to_thread(
-                self._read_effective_backend
+            # S-BE-04 (D1): bounded retry across the restart window; interim
+            # unknowns land in errors[] as transient-unknown:N notes.
+            final_backend, _final_services, _final_attempts = await asyncio.to_thread(
+                self._poll_effective_backend
             )
+            final_unknowns = _final_attempts - 1
+            if final_backend is None and any(
+                    (_final_services.get(svc) or {}).get("active")
+                    not in ("active", "inactive")
+                    for svc in ("iwd", "wpa_supplicant")):
+                final_unknowns += 1
             if failure_code is None and final_backend != target:
                 failure_code = "effective_mismatch"
                 final_shown = final_backend or "unknown"
@@ -4735,11 +4844,15 @@ class Plugin:
                     "needs_reboot": False,
                     "reconnect_timed_out": reconnect_timed_out,
                     "repair_of": repair_of,
-                    "errors": [],
+                    "errors": (
+                        [f"transient-unknown:{final_unknowns}"]
+                        if final_unknowns > 0 else []
+                    ),
                 }
             else:
                 rolled_back = False
                 rollback_note = ""
+                rb_unknowns = 0
                 if repair_of is not None:
                     # Repair rollback (ST0-009 D5): restore the previous
                     # conf layer (snapshot bytes, else delete the generic
@@ -4783,9 +4896,15 @@ class Plugin:
                             )
                             if not tail_result["success"]:
                                 tail_problems.append(step_name)
-                        rolled_value, _rolled_services = await asyncio.to_thread(
-                            self._read_effective_backend
+                        rolled_value, _rolled_services, rb_attempts = await asyncio.to_thread(
+                            self._poll_effective_backend
                         )
+                        rb_unknowns = rb_attempts - 1
+                        if rolled_value is None and any(
+                                (_rolled_services.get(svc) or {}).get("active")
+                                not in ("active", "inactive")
+                                for svc in ("iwd", "wpa_supplicant")):
+                            rb_unknowns += 1
                         if conf_ok and not tail_problems and rolled_value == prev:
                             rolled_back = True
                             rollback_note = f"rolled back to {prev}"
@@ -4800,6 +4919,10 @@ class Plugin:
                 detail = failure_detail
                 if rollback_note:
                     detail = f"{detail} | {rollback_note}" if detail else rollback_note
+                total_unknowns = final_unknowns + rb_unknowns
+                failed_errors = [failure_code]
+                if total_unknowns > 0:
+                    failed_errors.append(f"transient-unknown:{total_unknowns}")
                 self._backend_switch["phase"] = "failed"
                 failed_result = {
                     "success": False,
@@ -4809,7 +4932,7 @@ class Plugin:
                     "needs_reboot": False,
                     "reconnect_timed_out": reconnect_timed_out,
                     "repair_of": repair_of,
-                    "errors": [failure_code],
+                    "errors": failed_errors,
                     "message": self._friendly_backend_error(failure_detail),
                     "detail": detail,
                 }
