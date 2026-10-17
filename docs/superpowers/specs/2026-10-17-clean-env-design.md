@@ -39,15 +39,26 @@ Stage 0 stays open; no Stable, no version bump, no Watchdog. No DNS work.
   Particular attention: `BACKEND_HELPER` invocations, `modprobe` path
   fallbacks (`/usr/bin`→`/usr/sbin`), `systemctl restart plugin_loader` in the
   updater path (same poisoning, latent), `uname`, `tc`/`ip`/`sysctl`/`iw`/`nmcli`.
+  Addendum: updater/download/restart sites KEEP their explicit `clean_env=True`
+  deliberately (defense in depth at the highest-risk sites AND required by
+  `scripts/check_delivery.py:388-395`, which asserts the literal — do NOT
+  "clean up" the redundancy, it would break `check-syntax`/CI).
 - **D3 — mechanism tests.** Fixture (fail-closed builtins + mocked
   `subprocess.run` capturing the `env` kwarg): with poisoned `os.environ`
   (`LD_LIBRARY_PATH=/tmp/_MEI0000` + sentinel), `clean_env` default path must
   pass an env WITHOUT the variable; explicit `clean_env=False` must pass it
   through. Static tests: (a) signature default is `True` (AST); (b) zero
-  `clean_env=False` occurrences unless listed in D1 addendum.
+  unjustified opt-outs in BOTH forms — keyword `clean_env=False` AND positional
+  `False` as 4th argument in `to_thread(..., _run_cmd, ...)` and direct
+  `self._run_cmd(...)` calls (the codebase passes the flag positionally);
+  (c) call-site count assertion (61) so audit completeness is
+  machine-falsifiable.
 - **D4 — docs.** `AGENTS.md` gotcha generalized: ALL system-binary children
   (proven: `curl`, `bash`, now `systemctl` with the exact symbol error), not
-  just curl/bash. Findings device-note: S-BE-06 mechanism closed by this fix.
+  just curl/bash. Findings device-note: S-BE-06 mechanism fix landed, **device
+  confirmation pending — S-BE-06 stays open** per the Stage 0 rule (static
+  evidence never closes a finding; re-validation on the candidate follows the
+  device protocol).
 
 ## Acceptance
 
