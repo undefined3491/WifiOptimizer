@@ -65,6 +65,8 @@ export interface PluginStatus {
   live: LiveStatus;
   drift: Record<string, boolean>;
   unknown_owners?: string[];
+  // D2: read-only single-job update summary (observation only, no writes).
+  update_job?: UpdateJobSummary;
   last_applied?: number;
   error?: string;
   message?: string;
@@ -164,9 +166,47 @@ export interface UpdateCheckResult {
   current_version?: string;
   latest_version?: string;
   update_available?: boolean;
+  missing_files?: string[];
   release_url?: string;
+  errors?: string[];
   error?: string;
   message?: string;
+}
+
+export interface UpdateFileCommit {
+  committed: boolean;
+  version: string;
+  channel: string;
+  files: string;
+}
+
+export interface UpdateRestartReport {
+  requested: boolean;
+  rc: number | null;
+  stderr: string;
+}
+
+export interface UpdateJobResult {
+  target: string;
+  errors: string[];
+  file_commit: UpdateFileCommit;
+  restart: UpdateRestartReport;
+  health: string;
+}
+
+export interface UpdateJobSummary {
+  in_progress: boolean;
+  phase: string;
+  target: string | null;
+  started_at: number;
+  result: UpdateJobResult | null;
+}
+
+export interface UpdateStartResult {
+  accepted: boolean;
+  target?: string;
+  reason?: string;
+  job_id?: number;
 }
 
 export type BadgeStatus = "active" | "locked" | "set" | "drifted" | "off" | "error" | "unknown";

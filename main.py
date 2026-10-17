@@ -223,6 +223,44 @@ def _save_snapshot(data: dict) -> None:
     os.replace(tmp_path, SNAPSHOT_FILE)
 
 
+# ---- Stable updater contract (D2-D5) ----
+# Single in-memory update job with cross-exclusion; same-filesystem
+# staging; validated transfer/identity; per-file os.replace commit in
+# fixed order (version-bearing files LAST together); one restart with a
+# split file-commit/restart/health report. The live plugin directory is
+# never removed or renamed by any step.
+_UPDATE_PHASES = (
+    "idle",
+    "resolving",
+    "downloading",
+    "validating",
+    "committing",
+    "restart_requested",
+    "failed",
+    "done_unknown",
+)
+_UPDATE_ALLOWLIST = (
+    "defaults/dispatcher.sh.tmpl",
+    "decky.pyi",
+    "dist/index.js",
+    "dist/index.js.map",
+    "main.py",
+    "package.json",
+    "plugin.json",
+)
+_UPDATE_COMMIT_ORDER = (
+    "defaults/dispatcher.sh.tmpl",
+    "decky.pyi",
+    "dist/index.js",
+    "dist/index.js.map",
+    "main.py",
+    "package.json",
+    "plugin.json",
+)
+_UPDATE_CURL_TIMEOUT = 70
+_UPDATE_RESTART_TIMEOUT = 15
+
+
 class Plugin:
     """Root plugin instance. Decky exposes every async method here as a
     callable from the frontend. Synchronous helpers prefixed with `_` are
@@ -1063,6 +1101,20 @@ class Plugin:
             decky.logger.info("WiFi Optimizer TMS starting")
             self._rotate_logs()
             self._ensure_backend_switch_state()
+            self._ensure_update_job_state()
+            # Boot re-offer (D3): if a previous commit was interrupted, the
+            # next check_for_update reports update_available True via the
+            # missing-file rule. Log only here; no repair at boot.
+            missing = [
+                rel
+                for rel in _UPDATE_ALLOWLIST
+                if not os.path.isfile(os.path.join(decky.DECKY_PLUGIN_DIR, rel))
+            ]
+            if missing:
+                decky.logger.error(
+                    "Shipped files missing at boot; update will be re-offered: "
+                    + ", ".join(missing)
+                )
             info = await self.get_device_info()
             settings = _load_settings()
             settings["model"] = info.get("model", "unknown")
@@ -1825,6 +1877,26 @@ class Plugin:
                 status["unknown_owners"].append("dns")
             if settings.get("ipv6_disabled") and not settings.get("ipv6_owner_uuid"):
                 status["unknown_owners"].append("ipv6")
+
+            # Read-only update job summary (D2): observation only — no
+            # writes, no new IPC method. Missing state reads as idle.
+            job = self.__dict__.get("_update_job")
+            if isinstance(job, dict) and job:
+                status["update_job"] = {
+                    "in_progress": job.get("in_progress", False),
+                    "phase": job.get("phase", "idle"),
+                    "target": job.get("target"),
+                    "started_at": job.get("started_at", 0),
+                    "result": job.get("result"),
+                }
+            else:
+                status["update_job"] = {
+                    "in_progress": False,
+                    "phase": "idle",
+                    "target": None,
+                    "started_at": 0,
+                    "result": None,
+                }
 
             # Backend info is system-wide; populate regardless of connection state
             backend_available = self._has_backend_tool()
@@ -3786,10 +3858,36 @@ class Plugin:
 
     # ---- Updates (Stable-only; no Beta channel exists) ----
 
+    def _ensure_update_job_state(self):
+        """Initialize the in-memory update job (idle, no result).
+
+        Reads instance state via __dict__ so isolated fixtures without
+        getattr/hasattr in their fail-closed builtins can still exec this.
+        """
+        if not isinstance(self.__dict__.get("_update_job"), dict):
+            self._update_job = {
+                "in_progress": False,
+                "phase": "idle",
+                "target": None,
+                "started_at": 0,
+                "result": None,
+            }
+
     async def check_for_update(self) -> dict:
-        """Check GitHub for a newer Stable release (releases/latest)."""
+        """Check GitHub for a newer Stable release (releases/latest).
+
+        Stable-only: no channel branches. Any missing shipped file also
+        forces update_available True, so a crash-during-commit can never
+        strand a mixed tree without a re-offer on the next boot.
+        """
         try:
             current = decky.DECKY_PLUGIN_VERSION
+            plugin_dir = decky.DECKY_PLUGIN_DIR
+            missing = [
+                rel
+                for rel in _UPDATE_ALLOWLIST
+                if not os.path.isfile(os.path.join(plugin_dir, rel))
+            ]
             decky.logger.info(f"Update check: current={current}, channel=stable")
 
             result = await asyncio.to_thread(
@@ -3805,17 +3903,29 @@ class Plugin:
 
             if not result["success"] or not result["stdout"]:
                 decky.logger.error(f"Update check: curl failed - rc={result.get('returncode')}, stderr={result.get('stderr', '')[:200]}")
+                if missing:
+                    return {
+                        "success": False,
+                        "current_version": current,
+                        "latest_version": current,
+                        "update_available": True,
+                        "missing_files": missing,
+                        "message": "Couldn't reach GitHub; shipped files are missing",
+                        "errors": ["resolve_failed"],
+                    }
                 return {
                     "success": False,
                     "current_version": current,
                     "update_available": False,
+                    "missing_files": missing,
                     "message": "Couldn't reach GitHub",
+                    "errors": ["resolve_failed"],
                 }
 
             data = json.loads(result["stdout"])
 
             tag = data.get("tag_name", "")
-            latest = tag.lstrip("v")
+            latest = tag.lstrip("v") if isinstance(tag, str) else ""
 
             if not latest:
                 msg = data.get("message", "couldn't parse version")
@@ -3824,19 +3934,23 @@ class Plugin:
                     "success": False,
                     "current_version": current,
                     "update_available": False,
+                    "missing_files": missing,
                     "message": msg,
+                    "errors": ["resolve_failed"],
                 }
 
             # Stable: update only if newer. The "-beta" comparison is kept
             # until the known beta-channel field installation migrates: an
             # ex-beta build also updates to a Stable release of equal
-            # version.
+            # version. Missing shipped files force a re-offer regardless.
             current_clean = current.split("-")[0]
             latest_clean = latest.split("-")[0]
             current_tuple = tuple(int(x) for x in current_clean.split("."))
             latest_tuple = tuple(int(x) for x in latest_clean.split("."))
-            update_available = latest_tuple > current_tuple or (
-                "-beta" in current and latest_tuple >= current_tuple
+            update_available = (
+                latest_tuple > current_tuple
+                or ("-beta" in current and latest_tuple >= current_tuple)
+                or len(missing) > 0
             )
 
             decky.logger.info(f"Update check: current={current}, latest={latest}, channel=stable, update={update_available}")
@@ -3846,6 +3960,7 @@ class Plugin:
                 "current_version": current,
                 "latest_version": latest,
                 "update_available": update_available,
+                "missing_files": missing,
             }
         except Exception as e:
             decky.logger.error(f"check_for_update error: {e}")
@@ -3857,67 +3972,342 @@ class Plugin:
             }
 
     async def apply_update(self) -> dict:
-        """Download and install the Stable update, then restart Decky."""
+        """Start the Stable update job.
+
+        Reserves the single in-memory update job before the first await
+        (backend-switch reservation pattern), resolves the Stable target,
+        then launches the worker and returns the accepted shape
+        immediately. Rejections restore the previous job state; no
+        transient fields leak. Progress is observable via the read-only
+        update_job summary in get_status.
+        """
         try:
-            info = await self.check_for_update()
-            if not info.get("update_available"):
-                return {"success": False, "message": "No update available."}
-
-            latest = info["latest_version"]
-            plugin_dir = decky.DECKY_PLUGIN_DIR
-
-            tag = f"v{latest}"
-            download_url = f"https://github.com/undefined3491/wifi-optimizer-tms/archive/refs/tags/{tag}.tar.gz"
-            src_dir = f"wifi-optimizer-tms-{latest}"
-            label = f"v{latest}"
-
-            script = f"""#!/bin/bash
-sleep 2
-PLUGIN_DIR="{plugin_dir}"
-TMP=$(mktemp -d)
-cleanup() {{ rm -rf "$TMP"; rm -f "$0"; }}
-trap cleanup EXIT
-
-curl -sL "{download_url}" -o "$TMP/update.tar.gz"
-tar xzf "$TMP/update.tar.gz" -C "$TMP"
-SRC="$TMP/{src_dir}"
-
-if [ ! -f "$SRC/plugin.json" ]; then
-    logger -t wifi-optimizer "Update failed: download error"
-    exit 1
-fi
-
-cp "$SRC/plugin.json" "$PLUGIN_DIR/"
-cp "$SRC/package.json" "$PLUGIN_DIR/"
-cp "$SRC/main.py" "$PLUGIN_DIR/"
-cp "$SRC/decky.pyi" "$PLUGIN_DIR/"
-mkdir -p "$PLUGIN_DIR/dist" "$PLUGIN_DIR/defaults"
-cp "$SRC/dist/index.js" "$PLUGIN_DIR/dist/"
-cp "$SRC/dist/index.js.map" "$PLUGIN_DIR/dist/" 2>/dev/null || true
-cp "$SRC/defaults/dispatcher.sh.tmpl" "$PLUGIN_DIR/defaults/"
-
-logger -t wifi-optimizer "Updated to {label}, restarting plugin_loader"
-systemctl restart plugin_loader 2>/dev/null || true
-"""
-            script_path = "/tmp/wifi-optimizer-update.sh"
-            with open(script_path, "w") as f:
-                f.write(script)
-            os.chmod(script_path, 0o700)
-
-            clean_env = {k: v for k, v in os.environ.items() if k != "LD_LIBRARY_PATH"}
-            subprocess.Popen(
-                ["/bin/bash", script_path],
-                start_new_session=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                env=clean_env,
+            self._ensure_update_job_state()
+            self._ensure_backend_switch_state()
+            if self._update_job.get("in_progress"):
+                return {
+                    "accepted": False,
+                    "reason": "in_progress",
+                    "message": "An update is already in progress.",
+                }
+            switch = self._backend_switch or {}
+            if switch.get("in_progress"):
+                return {
+                    "accepted": False,
+                    "reason": "switch_in_progress",
+                    "message": "A WiFi backend switch is in progress; try again when it finishes.",
+                }
+            previous = dict(self._update_job)
+            job_id = int(time.time())
+            self._update_job.update(
+                {
+                    "in_progress": True,
+                    "phase": "resolving",
+                    "target": None,
+                    "started_at": job_id,
+                    "result": None,
+                }
             )
-
-            decky.logger.info(f"Update to {label} initiated (channel=stable)")
-            return {"success": True, "message": f"Updating to {label}..."}
+            try:
+                info = await self.check_for_update()
+            except Exception as e:
+                self._update_job.update(previous)
+                decky.logger.error(f"Update resolve failed: {e}")
+                return {
+                    "accepted": False,
+                    "reason": "unexpected",
+                    "message": str(e),
+                }
+            if not info.get("success") or not info.get("latest_version"):
+                self._update_job.update(previous)
+                return {
+                    "accepted": False,
+                    "reason": "no_release",
+                    "message": info.get("message") or "Couldn't determine the latest release.",
+                }
+            if not info.get("update_available"):
+                self._update_job.update(previous)
+                return {
+                    "accepted": False,
+                    "reason": "no_update",
+                    "message": "No update available.",
+                }
+            target = info["latest_version"]
+            self._update_job["target"] = target
+            self._update_task = asyncio.create_task(self._update_worker(target, job_id))
+            decky.logger.info(f"Update to v{target} accepted (job {job_id})")
+            return {"accepted": True, "target": target, "job_id": job_id}
         except Exception as e:
             decky.logger.error(f"apply_update error: {e}")
             return self._unexpected_response(e)
+
+    def _fsync_dir(self, path: str):
+        """Durability-sync a directory after commit (Linux dir-fsync semantics).
+
+        Isolated so fixtures can emulate the target platform: Windows
+        cannot open directories with os.open, while the Deck can.
+        """
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    async def _update_worker(self, target: str, job_id: int):
+        """Run the staged Stable update to completion in the background.
+
+        Same-filesystem sibling staging with a dev gate, validated
+        transfer/identity, per-file os.replace commit in fixed order and
+        exactly one plugin_loader restart. Every outcome — including
+        unexpected failures — lands in _update_job; the live plugin
+        directory is never removed or renamed. Never raises.
+        """
+        errors = []
+        total = len(_UPDATE_COMMIT_ORDER)
+        file_commit = {
+            "committed": False,
+            "version": target,
+            "channel": "stable",
+            "files": "0/" + str(total),
+        }
+        restart = {"requested": False, "rc": None, "stderr": ""}
+
+        def _finish(phase):
+            self._update_job.update(
+                {
+                    "in_progress": False,
+                    "phase": phase,
+                    "result": {
+                        "target": target,
+                        "errors": errors,
+                        "file_commit": file_commit,
+                        "restart": restart,
+                        "health": "load_unconfirmed",
+                    },
+                }
+            )
+
+        try:
+            job = self._update_job
+            if job.get("started_at") != job_id or not job.get("in_progress"):
+                return
+            plugin_dir = decky.DECKY_PLUGIN_DIR
+            base_dir = os.path.dirname(plugin_dir)
+            stage_dir = os.path.join(base_dir, ".wifi-optimizer-stage-" + str(job_id))
+            archive_path = os.path.join(stage_dir, "update.tar.gz")
+            payload_dir = os.path.join(stage_dir, "payload")
+            download_url = (
+                "https://github.com/undefined3491/wifi-optimizer-tms/archive/refs/tags/v"
+                + target
+                + ".tar.gz"
+            )
+
+            job["phase"] = "downloading"
+            try:
+                live_dev = os.stat(plugin_dir).st_dev
+                base_dev = os.stat(base_dir).st_dev
+            except OSError:
+                live_dev = None
+                base_dev = None
+            if live_dev is None or live_dev != base_dev:
+                errors.append("stage_failed")
+                decky.logger.error("Update staging failed: live dir is not on the base filesystem")
+                _finish("failed")
+                return
+            try:
+                os.makedirs(stage_dir, mode=0o700)
+                os.chmod(stage_dir, 0o700)
+            except OSError as e:
+                errors.append("stage_failed")
+                decky.logger.error(f"Update staging failed: {e}")
+                _finish("failed")
+                return
+
+            curl_cmd = [
+                "/usr/bin/curl",
+                "-fsSL",
+                "--proto",
+                "=https",
+                "--connect-timeout",
+                "5",
+                "--max-time",
+                "60",
+                "--max-filesize",
+                "50M",
+                "--retry",
+                "0",
+                "--fail",
+                download_url,
+                "-o",
+                archive_path,
+            ]
+            curl_result = await asyncio.to_thread(
+                self._run_cmd, curl_cmd, _UPDATE_CURL_TIMEOUT, True
+            )
+            if not curl_result.get("success"):
+                errors.append("download_failed")
+                decky.logger.error(
+                    "Update download failed: "
+                    + str(curl_result.get("stderr", ""))[:200]
+                )
+                shutil.rmtree(stage_dir, ignore_errors=True)
+                _finish("failed")
+                return
+
+            job["phase"] = "validating"
+            expected_root = "wifi-optimizer-tms-" + target
+            try:
+                with tarfile.open(archive_path, "r:*") as tar:
+                    members = tar.getmembers()
+                    seen = {}
+                    for member in members:
+                        name = member.name
+                        if name.startswith("/") or "\\" in name:
+                            raise ValueError("unsafe archive path: " + name)
+                        parts = name.split("/")
+                        bad = False
+                        for part in parts:
+                            if part in ("", ".", ".."):
+                                bad = True
+                        if bad:
+                            raise ValueError("unsafe archive path: " + name)
+                        if parts[0] != expected_root:
+                            raise ValueError("unexpected archive root: " + name)
+                        if name in seen:
+                            raise ValueError("duplicate archive entry: " + name)
+                        seen[name] = True
+                        if not (member.isdir() or member.isfile()):
+                            raise ValueError("unsupported archive entry: " + name)
+                    for rel in _UPDATE_ALLOWLIST:
+                        if expected_root + "/" + rel not in seen:
+                            raise ValueError("archive is missing shipped file: " + rel)
+                    for rel in _UPDATE_ALLOWLIST:
+                        dest = os.path.join(payload_dir, rel)
+                        parent = os.path.dirname(dest)
+                        if parent:
+                            os.makedirs(parent, exist_ok=True)
+                        data = tar.extractfile(expected_root + "/" + rel).read()
+                        with open(dest, "wb") as f:
+                            f.write(data)
+            except Exception as e:
+                errors.append("archive_invalid")
+                decky.logger.error(f"Update archive invalid: {e}")
+                shutil.rmtree(stage_dir, ignore_errors=True)
+                _finish("failed")
+                return
+
+            try:
+                with open(os.path.join(payload_dir, "plugin.json"), "r", encoding="utf-8") as f:
+                    manifest = json.load(f)
+                with open(os.path.join(payload_dir, "package.json"), "r", encoding="utf-8") as f:
+                    package = json.load(f)
+                with open(os.path.join(payload_dir, "dist/index.js"), "rb") as f:
+                    bundle = f.read()
+                with open(os.path.join(payload_dir, "dist/index.js.map"), "rb") as f:
+                    source_map = f.read()
+                if (
+                    not isinstance(manifest, dict)
+                    or manifest.get("name") != "WiFi Optimizer TMS"
+                    or manifest.get("api_version") != 1
+                ):
+                    raise ValueError("plugin.json identity mismatch")
+                if (
+                    not isinstance(package, dict)
+                    or package.get("name") != "wifi-optimizer-tms"
+                    or package.get("version") != target
+                ):
+                    raise ValueError("package.json identity mismatch")
+                if len(bundle) == 0 or len(source_map) == 0:
+                    raise ValueError("dist payload empty")
+                json.loads(source_map.decode("utf-8"))
+            except (OSError, ValueError) as e:
+                errors.append("identity_mismatch")
+                decky.logger.error(f"Update identity mismatch: {e}")
+                shutil.rmtree(stage_dir, ignore_errors=True)
+                _finish("failed")
+                return
+
+            job["phase"] = "committing"
+            done = 0
+            for rel in _UPDATE_COMMIT_ORDER:
+                try:
+                    dest = os.path.join(plugin_dir, rel)
+                    parent = os.path.dirname(dest)
+                    if parent:
+                        os.makedirs(parent, exist_ok=True)
+                    os.replace(os.path.join(payload_dir, rel), dest)
+                    done = done + 1
+                except OSError as e:
+                    errors.append("commit_failed:" + rel)
+                    file_commit.update(
+                        {"committed": False, "files": str(done) + "/" + str(total)}
+                    )
+                    decky.logger.error(f"Update commit failed at {rel}: {e}")
+                    _finish("failed")
+                    return
+            file_commit.update(
+                {"committed": True, "files": str(done) + "/" + str(total)}
+            )
+            try:
+                keep_path = os.path.join(plugin_dir, "py_modules", ".keep")
+                keep_parent = os.path.dirname(keep_path)
+                if keep_parent:
+                    os.makedirs(keep_parent, exist_ok=True)
+                with open(keep_path, "ab"):
+                    pass
+                self._fsync_dir(plugin_dir)
+            except OSError as e:
+                errors.append("commit_failed:fsync")
+                file_commit.update({"committed": False})
+                decky.logger.error(f"Update commit sync failed: {e}")
+                _finish("failed")
+                return
+
+            shutil.rmtree(stage_dir, ignore_errors=True)
+            restart_result = await asyncio.to_thread(
+                self._run_cmd,
+                ["/usr/bin/systemctl", "restart", "plugin_loader"],
+                _UPDATE_RESTART_TIMEOUT,
+                True,
+            )
+            restart.update(
+                {
+                    "requested": True,
+                    "rc": restart_result.get("returncode"),
+                    "stderr": str(restart_result.get("stderr", "")),
+                }
+            )
+            if restart_result.get("success"):
+                decky.logger.info(f"Updated to v{target}, plugin_loader restart requested")
+                _finish("restart_requested")
+            else:
+                errors.append("restart_failed")
+                decky.logger.error(
+                    "Update restart failed: rc="
+                    + str(restart_result.get("returncode"))
+                    + " "
+                    + str(restart_result.get("stderr", ""))[:200]
+                )
+                _finish("failed")
+        except Exception as e:
+            decky.logger.error(f"Update worker failed: {e}")
+            errors.append("unexpected")
+            try:
+                self._update_job.update(
+                    {
+                        "in_progress": False,
+                        "phase": "done_unknown",
+                        "result": {
+                            "target": target,
+                            "errors": errors,
+                            "file_commit": file_commit,
+                            "restart": restart,
+                            "health": "load_unconfirmed",
+                        },
+                    }
+                )
+            except Exception:
+                pass
 
     # ---- WiFi backend switch (iwd / wpa_supplicant) ----
 
@@ -4465,6 +4855,16 @@ systemctl restart plugin_loader 2>/dev/null || true
                     "accepted": False,
                     "reason": "in_progress",
                     "message": "Backend switch already in progress.",
+                }
+            # Cross-exclusion with the Stable updater (D2): an in-progress
+            # update owns the delivery path, so a switch start is rejected
+            # here at the reservation site, before anything is reserved.
+            update_job = self.__dict__.get("_update_job")
+            if isinstance(update_job, dict) and update_job.get("in_progress"):
+                return {
+                    "accepted": False,
+                    "reason": "update_in_progress",
+                    "message": "An update is in progress; try again when it finishes.",
                 }
             # Reserve before yielding so overlapping requests cannot launch two workers.
             previous_state = dict(self._backend_switch)

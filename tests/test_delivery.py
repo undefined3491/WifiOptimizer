@@ -1,4 +1,3 @@
-import ast
 import json
 import subprocess
 import tarfile
@@ -8,12 +7,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.check_delivery import (
+    check_python_and_shell,
     check_source_map_sources,
+    check_updater_contract,
     normalize_source_map,
     snapshot_dist,
     verify_dist,
-    check_python_and_shell,
-    _render_update_fstring,
     get_release_history,
     release_notes,
     validate_release,
@@ -197,40 +196,125 @@ class DistTests(unittest.TestCase):
             target.write_bytes(contents)
 
 
-class SyntaxTests(unittest.TestCase):
-    def test_rejects_unrendered_fstring_conversions_and_format_specs(self):
-        for expression, message in (("value!r", "conversion"), ("value:>10", "format specifier")):
-            with self.subTest(expression=expression), tempfile.TemporaryDirectory() as temp:
-                root = Path(temp)
-                (root / "defaults").mkdir()
-                main = (
-                    "class Plugin:\n"
-                    "    async def apply_update(self):\n"
-                    "        value = 'example'\n"
-                    f"        script = f'''echo {{{expression}}}\\n'''\n"
-                )
-                (root / "main.py").write_text(main, encoding="utf-8")
-                (root / "decky.pyi").write_text("class Plugin: ...\n", encoding="utf-8")
-                (root / "install.sh").write_text("#!/bin/bash\ntrue\n", encoding="utf-8")
-                (root / "defaults/dispatcher.sh.tmpl").write_text("#!/bin/bash\ntrue\n", encoding="utf-8")
-                with self.assertRaisesRegex(ValueError, message):
-                    _render_update_fstring(ast.parse(main, filename="main.py"))
+class UpdaterContractTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        (self.root / "defaults").mkdir()
+        (self.root / "decky.pyi").write_text("class Plugin: ...\n", encoding="utf-8")
+        (self.root / "install.sh").write_text("#!/bin/bash\ntrue\n", encoding="utf-8")
+        (self.root / "defaults/dispatcher.sh.tmpl").write_text("#!/bin/bash\ntrue\n", encoding="utf-8")
+        source = Path(__file__).resolve().parents[1] / "main.py"
+        self.conforming = source.read_text(encoding="utf-8")
 
-    def test_rejects_malformed_generated_update_script(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            (root / "defaults").mkdir()
-            (root / "main.py").write_text(
-                'class Plugin:\n'
-                '    async def apply_update(self):\n'
-                '        script = f"""if then\\n"""\n',
-                encoding="utf-8",
-            )
-            (root / "decky.pyi").write_text("class Plugin: ...\n", encoding="utf-8")
-            (root / "install.sh").write_text("#!/bin/bash\ntrue\n", encoding="utf-8")
-            (root / "defaults/dispatcher.sh.tmpl").write_text("#!/bin/bash\ntrue\n", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "generated script"):
-                check_python_and_shell(root)
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def write_main(self, text):
+        (self.root / "main.py").write_text(text, encoding="utf-8")
+
+    def test_accepts_hardened_updater(self):
+        self.write_main(self.conforming)
+        check_updater_contract(self.root)
+
+    def test_rejects_missing_updater_method(self):
+        self.write_main("class Plugin:\n    pass\n")
+        with self.assertRaisesRegex(ValueError, "missing updater methods"):
+            check_updater_contract(self.root)
+
+    def test_rejects_fixed_tmp_script_path(self):
+        mutated = self.conforming.replace(
+            "archive_path = os.path.join(stage_dir, \"update.tar.gz\")",
+            "archive_path = os.path.join(stage_dir, \"update.tar.gz\")\n            script_path = \"/tmp/wifi-optimizer-update.sh\"",
+        )
+        self.assertNotEqual(mutated, self.conforming)
+        self.write_main(mutated)
+        with self.assertRaisesRegex(ValueError, "detached script"):
+            check_updater_contract(self.root)
+
+    def test_rejects_detached_popen_copy(self):
+        mutated = self.conforming.replace(
+            "restart_result = await asyncio.to_thread(",
+            "subprocess.Popen([\"true\"])\n            restart_result = await asyncio.to_thread(",
+        )
+        self.assertNotEqual(mutated, self.conforming)
+        self.write_main(mutated)
+        with self.assertRaisesRegex(ValueError, "detached script"):
+            check_updater_contract(self.root)
+
+    def test_rejects_unchecked_curl_transfer(self):
+        mutated = self.conforming.replace('                "--fail",\n', "")
+        self.assertNotEqual(mutated, self.conforming)
+        self.write_main(mutated)
+        with self.assertRaisesRegex(ValueError, "--fail"):
+            check_updater_contract(self.root)
+
+    def test_rejects_relaxed_clean_env(self):
+        mutated = self.conforming.replace(
+            "self._run_cmd, curl_cmd, _UPDATE_CURL_TIMEOUT, True",
+            "self._run_cmd, curl_cmd, _UPDATE_CURL_TIMEOUT, False",
+        )
+        self.assertNotEqual(mutated, self.conforming)
+        self.write_main(mutated)
+        with self.assertRaisesRegex(ValueError, "clean_env"):
+            check_updater_contract(self.root)
+
+    def test_rejects_wrong_commit_order(self):
+        head, sep, tail = self.conforming.partition("_UPDATE_COMMIT_ORDER = (")
+        self.assertTrue(sep)
+        mutated_tail = tail.replace(
+            '    "main.py",\n    "package.json",\n    "plugin.json",\n)',
+            '    "plugin.json",\n    "package.json",\n    "main.py",\n)',
+            1,
+        )
+        self.assertNotEqual(mutated_tail, tail)
+        self.write_main(head + sep + mutated_tail)
+        with self.assertRaisesRegex(ValueError, "commit order"):
+            check_updater_contract(self.root)
+
+    def test_rejects_copy_outside_ordered_loop(self):
+        mutated = self.conforming.replace(
+            "os.replace(os.path.join(payload_dir, rel), dest)",
+            "shutil.copy(os.path.join(payload_dir, rel), dest)",
+        )
+        self.assertNotEqual(mutated, self.conforming)
+        self.write_main(mutated)
+        with self.assertRaisesRegex(ValueError, "os.replace"):
+            check_updater_contract(self.root)
+
+    def test_rejects_live_dir_removal(self):
+        mutated = self.conforming.replace(
+            "shutil.rmtree(stage_dir, ignore_errors=True)\n            restart_result",
+            "os.rename(stage_dir, plugin_dir)\n            restart_result",
+        )
+        self.assertNotEqual(mutated, self.conforming)
+        self.write_main(mutated)
+        with self.assertRaisesRegex(ValueError, "never remove or rename"):
+            check_updater_contract(self.root)
+
+    def test_rejects_stage_only_but_wrong_target(self):
+        mutated = self.conforming.replace(
+            "shutil.rmtree(stage_dir, ignore_errors=True)",
+            "shutil.rmtree(base_dir, ignore_errors=True)",
+        )
+        self.assertNotEqual(mutated, self.conforming)
+        self.write_main(mutated)
+        with self.assertRaisesRegex(ValueError, "only ever remove the stage dir"):
+            check_updater_contract(self.root)
+
+    def test_rejects_missing_error_code(self):
+        mutated = self.conforming.replace('"restart_failed"', '"restart_broken"')
+        self.assertNotEqual(mutated, self.conforming)
+        self.write_main(mutated)
+        with self.assertRaisesRegex(ValueError, "restart_failed"):
+            check_updater_contract(self.root)
+
+    def test_rejects_missing_phase(self):
+        mutated = self.conforming.replace('"done_unknown"', '"done_maybe"')
+        self.assertNotEqual(mutated, self.conforming)
+        self.write_main(mutated)
+        with self.assertRaisesRegex(ValueError, "done_unknown"):
+            check_updater_contract(self.root)
 
 
 if __name__ == "__main__":

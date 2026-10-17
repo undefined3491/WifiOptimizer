@@ -27,9 +27,11 @@ SOURCE = Path(__file__).resolve().parents[1] / "main.py"
 # check_for_update keep their IPC names; only the start shape changes.
 ENTRY_METHODS = {
     "_ensure_update_job_state",
-    "apply_update",
-    "check_for_update",
     "_ensure_backend_switch_state",
+    "apply_update",
+    "_fsync_dir",
+    "_update_worker",
+    "check_for_update",
     "start_backend_switch",
 }
 
@@ -84,10 +86,18 @@ class DeliveryFixture:
         assert {node.name for node in methods} == ENTRY_METHODS, (
             f"update entry surface missing: {ENTRY_METHODS - {node.name for node in methods}}"
         )
+        constants = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(getattr(t, "id", "").startswith("_UPDATE_") for t in node.targets)
+        ]
+        assert len(constants) >= 2, "updater constants missing"
         namespace = {
             "__builtins__": {
                 "dict": dict,
                 "list": list,
+                "tuple": tuple,
                 "str": str,
                 "int": int,
                 "bool": bool,
@@ -100,6 +110,7 @@ class DeliveryFixture:
                 "range": range,
                 "open": open,
                 "Exception": Exception,
+                "OSError": OSError,
                 "ValueError": ValueError,
                 "RuntimeError": RuntimeError,
             },
@@ -119,9 +130,11 @@ class DeliveryFixture:
             ),
             "_load_settings": lambda: dict(self.settings),
         }
-        exec(compile(ast.Module(body=methods, type_ignores=[]), str(SOURCE), "exec"), namespace)
+        exec(compile(ast.Module(body=constants + methods, type_ignores=[]), str(SOURCE), "exec"), namespace)
         self.plugin = type("IsolatedUpdateEntry", (), {name: namespace[name] for name in ENTRY_METHODS})()
         self.plugin._run_cmd = self._fake_run_cmd
+        self.plugin._fsync_dir = self._fake_fsync_dir
+        self.fsync_calls = []
         self.plugin._unexpected_response = lambda e: {
             "accepted": False,
             "reason": "unexpected",
@@ -188,6 +201,12 @@ class DeliveryFixture:
                 tar.addfile(info, io.BytesIO(data))
 
     # -- scripted process effects ------------------------------------------
+
+    def _fake_fsync_dir(self, path):
+        # Windows cannot dir-fsync; emulate the Linux target (record + succeed).
+        self.fsync_calls.append(path)
+        keep = Path(path) / "py_modules" / ".keep"
+        assert keep.is_file(), "fsync must run after the .keep touch"
 
     def _fake_run_cmd(self, cmd, timeout=5, clean_env=False):
         self.run_calls.append((list(cmd), timeout, clean_env))
