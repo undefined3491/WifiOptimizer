@@ -49,8 +49,9 @@ Stage 0 stays open; no Stable, no version bump, no Watchdog. No DNS work.
   pass an env WITHOUT the variable; explicit `clean_env=False` must pass it
   through. Static tests: (a) signature default is `True` (AST); (b) zero
   unjustified opt-outs in BOTH forms — keyword `clean_env=False` AND positional
-  `False` as 4th argument in `to_thread(..., _run_cmd, ...)` and direct
-  `self._run_cmd(...)` calls (the codebase passes the flag positionally);
+  `False` (4th argument in `to_thread(..., _run_cmd, ...)` wrappers, 3rd argument
+  in direct `self._run_cmd(...)` calls — the codebase passes the flag
+  positionally);
   (c) call-site count assertion (61) so audit completeness is
   machine-falsifiable.
 - **D4 — docs.** `AGENTS.md` gotcha generalized: ALL system-binary children
@@ -58,8 +59,7 @@ Stage 0 stays open; no Stable, no version bump, no Watchdog. No DNS work.
   just curl/bash. Findings device-note: S-BE-06 mechanism fix landed, **device
   confirmation pending — S-BE-06 stays open** per the Stage 0 rule (static
   evidence never closes a finding; re-validation on the candidate follows the
-  device protocol).
-
+  device protocol). No "closure" language anywhere for S-BE-06.
 ## Acceptance
 
 - Poisoned-parent fixture: stripped env for default/True, passthrough only for
