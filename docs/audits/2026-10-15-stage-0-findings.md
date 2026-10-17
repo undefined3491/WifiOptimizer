@@ -135,6 +135,16 @@ This section tracks defects discovered during candidate device validation
 audit ST0 findings. ST0 counts above are unchanged. Stage 0 stays open pending
 candidate device validation and the first Stable release.
 
+- **S-BE-06 (poisoned `LD_LIBRARY_PATH` reaches system binaries): corrected
+  in source, mechanism + static verification.** `_run_cmd` now defaults to
+  `clean_env=True`, so every spawned system binary runs without Decky's
+  bundled `LD_LIBRARY_PATH` (proven poisonings: `curl`, `bash`, and now
+  `/usr/bin/systemctl` — `libcrypto.so.3: version OPENSSL_3.4.0 not found`
+  with empty stdout). Seven isolated tests (2 red→green) plus a 61-row
+  call-site audit; all 14 wrapper sites keep explicit `True`. Device
+  confirmation pending — S-BE-06 stays open per the Stage 0 rule;
+  re-validation on the candidate follows the device protocol. See the [design](../superpowers/specs/2026-10-17-clean-env-design.md)
+  and [plan](../superpowers/plans/2026-10-17-clean-env.md).
 - **S-BE-04 (transient effective-read): corrected in source, isolated regression
   verified.** Worker/rollback verification retries the effective read within a
   bounded budget; persistent mismatch still fails named. Re-validation on device
