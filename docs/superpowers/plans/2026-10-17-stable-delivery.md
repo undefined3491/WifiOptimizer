@@ -105,7 +105,7 @@
 - Modify: `install.sh`
 - Test: `check-syntax` + review (no live runs) + `tests/test_delivery.py` still green
 
-- [ ] **Step 1: Implement** sibling staging + dev gate, validated transfer, identity checks, no `rm -rf` (fresh `mv -n` / upgrade per-file cp), truthful stdout + exit codes, labeled main-fallback.
+- [ ] **Step 1: Implement** sibling staging under `$PLUGIN_BASE` (`mktemp -d` pinned, never bare `/tmp`) + dev gate, validated transfer, identity checks, no `rm -rf` of live (fresh `mv -n` when live absent / upgrade per-file `mv` renames, never truncating `cp`; `rm -rf` only for the stage dir), truthful stdout + exit codes, labeled main-fallback.
 - [ ] **Step 2: Verify** `check-syntax` exit 0; backend suite green; review checklist (no live-dir removal, no silent fallback, no unvalidated copy).
 - [ ] **Step 3: Commit** `git add install.sh; git commit -m "fix: install.sh as validated rescue installer"`
 
