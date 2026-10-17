@@ -562,6 +562,10 @@ class EffectiveRetryTests(unittest.IsolatedAsyncioTestCase):
         f = self.fixture()
         f.set_conf("generic", "wpa_supplicant")
         f.set_services(iwd_active="inactive", wpa_active="inactive")
+        f.seed_snapshot({
+            "backend": {"backend": "wpa_supplicant", "services": {}},
+            "file_backend_conf": {"exists": True, "content": "x"},
+        })
         f.script_command(
             [_ok(""), _ok("active\n")], SYSTEMCTL, "is-active", "iwd")
         result = await f.run_generic("iwd")
@@ -575,6 +579,10 @@ class EffectiveRetryTests(unittest.IsolatedAsyncioTestCase):
         f = self.fixture()
         f.set_conf("valve", "wpa_supplicant")
         f.set_services(iwd_active="inactive", wpa_active="inactive")
+        f.seed_snapshot({
+            "backend": {"backend": "wpa_supplicant", "services": {}},
+            "file_backend_conf": {"exists": True, "content": "x"},
+        })
         f.script_command(_ok("ok"), f.BACKEND_HELPER, "write_config", "iwd")
         f.script_command(
             _ok("units restarted"), f.BACKEND_HELPER, "restart_units",
@@ -592,6 +600,16 @@ class EffectiveRetryTests(unittest.IsolatedAsyncioTestCase):
         f = self.fixture()
         f.set_conf("generic", "wpa_supplicant")
         f.set_services(iwd_active="inactive", wpa_active="active")
+        f.seed_snapshot({
+            "backend": {"backend": "wpa_supplicant", "services": {}},
+            "file_backend_conf": {"exists": True, "content": "x"},
+        })
+        # Scripted ground truth overrides the worker's own service
+        # mutations: effective stays wpa no matter what the worker does.
+        f.script_command(
+            _ok("inactive\n"), SYSTEMCTL, "is-active", "iwd")
+        f.script_command(
+            _ok("active\n"), SYSTEMCTL, "is-active", "wpa_supplicant")
         result = await f.run_generic("iwd")
         assert result["success"] is False
         errors = result.get("errors") or []
@@ -602,6 +620,11 @@ class EffectiveRetryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_budget_exhaustion_notes_attempts(self):
         f = self.fixture()
+        f.script_command(
+            [_ok(""), _ok(""), _ok("")], SYSTEMCTL, "is-active", "iwd")
+        f.script_command(
+            [_ok(""), _ok(""), _ok("")],
+            SYSTEMCTL, "is-active", "wpa_supplicant")
         value, services, attempts = f.plugin._poll_effective_backend()
         assert isinstance(attempts, int), (
             f"helper must return (value, services, attempts): {(value, services, attempts)!r}")
@@ -614,6 +637,10 @@ class EffectiveRetryTests(unittest.IsolatedAsyncioTestCase):
         g = self.fixture()
         g.set_conf("generic", "wpa_supplicant")
         g.set_services(iwd_active="inactive", wpa_active="inactive")
+        g.seed_snapshot({
+            "backend": {"backend": "wpa_supplicant", "services": {}},
+            "file_backend_conf": {"exists": True, "content": "x"},
+        })
         g.script_command(
             [_ok(""), _ok(""), _ok("")], SYSTEMCTL, "is-active", "iwd")
         g.script_command(
