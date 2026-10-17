@@ -101,7 +101,32 @@ The baseline report recorded **14 Important and 9 Minor findings**, with **no Cr
   and [plan](../superpowers/plans/2026-10-16-st0-ui-intent.md).
   Corrected-candidate device validation (including on-screen keyboard and
   gamepad-focus behavior) remains pending.
-- The other **3 Important and 1 Minor findings remain open**. Stage 0 and first Stable remain gated on their resolution/disposition and candidate-specific device evidence.
+- **ST0-001/002/003/018: corrected, isolated + review verification (this branch).**
+  Beta channel dropped (Stable-only updater + installer; stored `"beta"` migrates
+  automatically; ex-beta version rule kept). Single update job with phase machine
+  and cross-exclusion against backend switches (both directions); same-filesystem
+  sibling staging with dev gate; validated transfer (deadlines, `--fail`) and
+  identity (single root, name/version match, 7-file allowlist, parseable map);
+  per-file commit with version files last, no live-dir removal, mid-loop failure
+  withholds restart with partial counts and retained stage; boot re-offer on
+  missing shipped files. One restart, split `file_commit`/`restart`/`health:
+  load_unconfirmed` reporting, named error codes, 60 s UI timeout as unknown.
+  `install.sh` as validated rescue (staging, identity, no `rm -rf` of live,
+  atomic fresh/upgrade paths, truthful stdout/exit). UI mutual exclusion both
+  directions; delivery guards in `check_delivery.py` rewritten to the new
+  contract. Ten isolated tests (red→green) in `tests/test_delivery_update.py`;
+  full suite 132 tests OK (3 Windows inventory skips, Git Bash on PATH);
+  `tsc --skipLibCheck` and `pnpm run build` clean with rebuilt tracked `dist`.
+  Independent review + scoped re-review clean. See the [design](../superpowers/specs/2026-10-17-stable-delivery-design.md)
+  and [plan](../superpowers/plans/2026-10-17-stable-delivery.md).
+  Stage 0 code is complete; candidate device validation + release still required
+  (NOT Stage 0 closure). The two designed-out open questions (fixed-`/tmp`
+  updater script, updater shell interpolation) are gone with the detached
+  script; event-loop blocking, dispatcher races, and adapter coverage stay
+  explicitly open.
+- All 14 Important and 9 Minor findings are corrected in source with isolated
+  verification. Stage 0 stays open pending candidate device validation and the
+  first Stable release.
 
 ## Coverage and evidence
 
