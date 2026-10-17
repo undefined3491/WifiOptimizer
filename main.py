@@ -3852,6 +3852,7 @@ class Plugin:
                 )
                 errors.append("fallback:pcie")
                 _, _, pcie_notes = self._apply_pcie_aspm_fix(False)
+                errors.extend(pcie_notes)
 
             # (b) Converge live iw + NM conf to power_save_disabled=True.
             if iface:

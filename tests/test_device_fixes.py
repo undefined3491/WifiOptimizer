@@ -758,6 +758,8 @@ class PcieVerifyTests(unittest.TestCase):
         assert (code, detail) == (None, None), (
             f"missing path must stay a silent skip: {(code, detail)!r}")
         assert notes == [], f"all-writable converge must note nothing: {notes!r}"
+        assert f.pcie_path("l1_2_pcipm") not in f.fs, (
+            "missing path must stay absent: helper must not create it")
         for name, want in contents.items():
             assert f.fs[os_path(f, name)].strip() == want, (
                 f"{name} must converge to {want!r}")
